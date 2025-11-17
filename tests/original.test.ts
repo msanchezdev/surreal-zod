@@ -180,6 +180,57 @@ describe("zod", () => {
     ],
   });
 
+  defineTest("unknown", z.unknown(), {
+    type: "any",
+    tests: [
+      testCase({ value: "Hello World" }),
+      testCase({ value: 12345 }),
+      testCase({ value: true }),
+      testCase({ value: false }),
+      testCase({ value: null }),
+      testCase({ value: undefined }),
+      testCase({ value: [] }),
+      testCase({ value: {} }),
+    ],
+  });
+
+  defineTest("never", z.never(), {
+    type: "NONE",
+    tests: [
+      testCase({
+        value: undefined,
+      }),
+      testCase({
+        value: "Hello World",
+        error: /expected `NONE` but found `'Hello World'`/i,
+      }),
+      testCase({
+        value: 12345,
+        error: /expected `NONE` but found `12345`/i,
+      }),
+      testCase({
+        value: true,
+        error: /expected `NONE` but found `true`/i,
+      }),
+      testCase({
+        value: false,
+        error: /expected `NONE` but found `false`/i,
+      }),
+      testCase({
+        value: null,
+        error: /expected `NONE` but found `NULL`/i,
+      }),
+      testCase({
+        value: [],
+        error: /expected `NONE` but found `\[\]`/i,
+      }),
+      testCase({
+        value: {},
+        error: /expected `NONE` but found `{\s+}`/i,
+      }),
+    ],
+  });
+
   // defineTest("NONE", z.undefined(), {
   //   type: "NONE",
   //   tests: {
@@ -202,7 +253,7 @@ describe("zod", () => {
   //   },
   // });
 
-  defineTest("bool", z.boolean(), {
+  defineTest("boolean", z.boolean(), {
     type: "bool",
     tests: [
       testCase({ value: true }),

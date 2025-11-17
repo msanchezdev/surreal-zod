@@ -7,7 +7,7 @@
 
 import z from "zod";
 import { zodToSurql } from "./src/surql";
-import { surql, Surreal } from "surrealdb";
+import { RecordId, surql, Surreal } from "surrealdb";
 import sz from "./src";
 
 //   identification: z

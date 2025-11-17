@@ -1,6 +1,6 @@
 {
   "name": "surreal-zod",
-  "version": "0.0.0-alpha.4",
+  "version": "0.0.0-alpha.6",
   "scripts": {
     "build": "tsc",
     "prepack": "bun run build"
@@ -32,6 +32,6 @@
   "dependencies": {
     "@surrealdb/node": "2.3.4",
     "dedent": "^1.7.0",
-    "surrealdb": "^2.0.0-alpha.13"
+    "surrealdb": "github:msanchezdev/surrealdb.js#typed-record-ids:packages/sdk"
   }
 }

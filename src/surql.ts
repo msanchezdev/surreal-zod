@@ -10,7 +10,7 @@ import * as z4 from "zod/v4/core";
 import z from "zod";
 import dedent from "dedent";
 import type sz from ".";
-import type { SurrealZodType, SurrealZodTypes } from "./zod";
+import type { SurrealZodType, SurrealZodTypes } from "./zod/schema";
 
 export type ZodTypeName = z4.$ZodType["_zod"]["def"]["type"];
 export type SurrealZodTypeName = SurrealZodType["_zod"]["def"]["type"];
@@ -209,7 +209,24 @@ export function zodTypeToSurrealType(
   parseChecks(context.name, checks, context, def.type);
   // console.log(zodToSexpr(type));
 
+  if ("surrealType" in def) {
+    switch (def.surrealType) {
+      case "record_id":
+        if (def.table) {
+          return `record<${def.table.map(escapeIdent).join(" | ")}>`;
+        } else {
+          return "record";
+        }
+    }
+  }
+
   switch (def.type) {
+    case "any":
+    case "unknown":
+      return "any";
+    case "never":
+    case "undefined":
+      return "NONE";
     case "string":
       return "string";
     case "boolean":
@@ -234,24 +251,7 @@ export function zodTypeToSurrealType(
     //   return "bigint";
     // case "symbol":
     //   return "symbol";
-    case "any": {
-      //===============================
-      // Surreal Specific Types
-      //===============================
-      if ("surrealType" in def) {
-        if (def.surrealType === "record_id") {
-          if (def.what) {
-            return `record<${Object.keys(def.what).join(" | ")}>`;
-          } else {
-            return "record";
-          }
-        }
-      }
-      return "any";
-    }
-    case "undefined": {
-      return "NONE";
-    }
+
     case "default": {
       // if (typeof def.defaultValue === "function") {
       //   context.default = { value: def.defaultValue(), always: false };
