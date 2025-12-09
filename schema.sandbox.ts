@@ -1,41 +1,84 @@
 import z from "zod/v4";
 import sz from "./src";
-import { RecordId } from "surrealdb";
+import { RecordId, Surreal } from "surrealdb";
+import { inspect } from "bun";
 
-const idType = sz.recordId(["client", "admin", "user"]); // .type(z.any());
-// z.parse(idType, new RecordId("test", "123"));
+// const Client = sz.table("client").fields({
+//   id: sz.string(),
+// });
+// const Order = sz.table("order").fields({
+//   id: sz.number(),
+// });
+// const User = sz
+//   .table("user")
+//   .schemafull()
+//   .fields({
+//     // id: sz.string(),
+//     name: sz.string(),
+//     client: Client.record().optional(),
+//     meta: sz.unknown(),
+//   })
+//   .comment("This table contains user information");
 
-const User = sz
-  .table("user")
-  .schemafull()
-  .fields({
-    id: sz.recordId("test").type(z.string()),
-    name: sz.string(),
-  })
-  .comment("This table contains user information");
+// // const parsedUser = z.safeParse(User, {
+// //   id: new RecordId("user", "123"),
+// //   name: "John Doe",
+// // });
+// // parsedUser.data;
+// // console.log(parsedUser);
+// // console.log("-".repeat(80));
 
-const Client = sz
-  .table("client")
-  .schemafull()
-  .fields({
-    id: sz.recordId("test").type(z.string()),
-    name: sz.string(),
-    tracker: User.record(),
-  })
-  .comment("This table contains client information");
+// const surreal = new Surreal();
+// await surreal.connect("ws://127.0.0.1:8000", {
+//   authentication: {
+//     username: "root",
+//     password: "Welc0me123.",
+//   },
+//   namespace: "test",
+//   database: "test",
+// });
+// // await surreal.query(`REMOVE DATABASE IF EXISTS test`);
+// // const query = User.toSurql("define");
+// // console.log(query.query);
+// // console.log(await surreal.query(query).collect());
+// // // console.log(
+// // //   inspect(await surreal.query(User.toSurql("structure")).collect(), {
+// // //     colors: true,
+// // //   }),
+// // // );
+// const schema = // .relation()
+//   sz
+//     .table("user")
+//     // .relation()
+//     // .from(Client.record())
+//     // .to(Order.record())
+//     // .schemafull()
+//     // .schemaless()
+//     // .drop()
+//     .fields({
+//       id: sz.any(),
+//       name: sz.string(),
+//       age: sz.number().optional().optional(),
+//     });
 
-const parsedUser = z.safeParse(User, {
-  id: new RecordId("user", "123"),
-  name: "John Doe",
+// // schema._zod.def.fields.
+
+// const query = schema.toSurql("define", { exists: "overwrite", fields: true });
+// console.log(query.query);
+// const [result] = await surreal.query(query).collect();
+// console.log(result);
+// // const result = schema.parse("Hello World");
+// // console.log(result);
+
+const schema = sz.object({
+  name: sz.string(),
+  age: sz.number(),
 });
-parsedUser.data;
-console.log(parsedUser);
-console.log("-".repeat(80));
 
-const parsedClient = z.safeParse(Client, {
-  id: new RecordId("client", "123"),
-  name: "John Doe",
-  tracker: new RecordId("user", "123"),
-});
-console.log(parsedClient);
-console.log("-".repeat(80));
+console.log(
+  schema.parse({
+    name: "John Doe",
+    age: 17,
+    meta: { created: new Date() },
+  }),
+);

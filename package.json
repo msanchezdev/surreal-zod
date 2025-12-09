@@ -1,6 +1,6 @@
 {
   "name": "surreal-zod",
-  "version": "0.0.0-alpha.9",
+  "version": "0.0.0-alpha.11",
   "scripts": {
     "build": "tsc",
     "prepack": "bun run build"

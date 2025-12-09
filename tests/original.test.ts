@@ -7,17 +7,18 @@ import {
   test,
 } from "bun:test";
 import dedent from "dedent";
-import { RecordId, surql, Surreal, Table } from "surrealdb";
+import { escapeIdent, RecordId, surql, Surreal, Table } from "surrealdb";
 import z from "zod/v4";
 import type z4 from "zod/v4/core";
-import { zodToSurql } from "../src/surql";
 import {
   startSurrealTestInstance,
-  testCase,
   type TestCaseChildField,
   type TestInstance,
   type ZodTest,
 } from "./utils";
+import * as common from "./common";
+import sz from "../src";
+import { SurrealZodTable } from "../src/zod/schema";
 
 describe("zod", () => {
   let testInstance: TestInstance;
@@ -38,9 +39,9 @@ describe("zod", () => {
     await testInstance.close();
   });
 
-  function getFieldQuery(field: TestCaseChildField) {
+  function getFieldQuery(field: TestCaseChildField, table = "test") {
     return dedent.withOptions({ alignValues: true })`
-      DEFINE FIELD OVERWRITE ${field.name} ON TABLE test TYPE ${field.type}${
+      DEFINE FIELD OVERWRITE ${field.name} ON TABLE ${table} TYPE ${field.type}${
         field.default
           ? field.default.always
             ? ` DEFAULT ALWAYS ${JSON.stringify(field.default.value)}`
@@ -74,31 +75,53 @@ describe("zod", () => {
     test(typeName, async () => {
       schemas = Array.isArray(schemas) ? schemas : [schemas];
       for (const schema of schemas) {
-        const [_, query] = zodToSurql({
-          table: new Table("test"),
+        const isTable = schema instanceof SurrealZodTable;
+        const table = isTable
+          ? schema
+          : sz.table("test").fields({
+              test: schema as any,
+            });
+        const query = table.toSurql("define", {
           exists: "overwrite",
-          schema: z.object({
-            test: schema,
-          }),
+          fields: true,
         });
+        const tableName = table._zod.def.name;
+        const schemafull = table._zod.def.surreal.schemafull;
+        const tableType = table._zod.def.surreal.tableType;
 
         const resultingQuery = query.query;
         let expectedQuery = dedent.withOptions({ alignValues: true })`
-          DEFINE TABLE OVERWRITE test SCHEMALESS;
-          ${getFieldQuery({
-            name: "test",
-            type: expected.type ?? "any",
-            default: expected.default ?? undefined,
-            transforms: expected.transforms ?? [],
-            asserts: expected.asserts ?? [],
-          })}
+          DEFINE TABLE OVERWRITE ${escapeIdent(tableName)} TYPE ${tableType.toUpperCase()} ${schemafull ? "SCHEMAFULL" : "SCHEMALESS"};
         `;
+        if (!isTable) {
+          expectedQuery += "\n";
+          expectedQuery += getFieldQuery(
+            {
+              name: "id",
+              type: "any",
+              default: expected.default ?? undefined,
+              transforms: expected.transforms ?? [],
+              asserts: expected.asserts ?? [],
+            },
+            tableName,
+          );
+          expectedQuery += getFieldQuery(
+            {
+              name: "test",
+              type: expected.type ?? "any",
+              default: expected.default ?? undefined,
+              transforms: expected.transforms ?? [],
+              asserts: expected.asserts ?? [],
+            },
+            tableName,
+          );
+        }
         if (expected.children?.length) {
           expectedQuery += "\n";
           const childrenQueue = [
             ...expected.children.map((child) => ({
               ...child,
-              name: `test.${child.name}`,
+              name: isTable ? child.name : `test.${child.name}`,
             })),
           ];
           while (childrenQueue.length > 0) {
@@ -112,7 +135,7 @@ describe("zod", () => {
                 })),
               );
             }
-            expectedQuery += getFieldQuery(child);
+            expectedQuery += getFieldQuery(child, tableName);
           }
         }
 
@@ -130,9 +153,14 @@ describe("zod", () => {
           for (let i = 0; i < expected.tests.length; i++) {
             // biome-ignore lint/style/noNonNullAssertion: bounds accounted for
             const test = expected.tests[i]!;
+            const testCaseId = isTable
+              ? new RecordId(tableName, `testcase_${i}`)
+              : new RecordId("test", `testcase_${i}`);
             const result = surreal
               .query(
-                surql`UPSERT ONLY ${new RecordId("test", `passing_${i}`)} SET test = ${test.value} RETURN AFTER.test`,
+                isTable
+                  ? surql`UPSERT ONLY ${testCaseId} CONTENT ${test.value}`
+                  : surql`UPSERT ONLY ${testCaseId} SET test = ${test.value} RETURN AFTER.test`,
               )
               .collect()
               .then(([result]) => result);
@@ -158,7 +186,14 @@ describe("zod", () => {
               }
             } else {
               const awaitedResult = await result;
-              expect(awaitedResult).toEqual(test.equals ?? test.value);
+              expect(awaitedResult).toEqual(
+                isTable
+                  ? {
+                      id: new RecordId("a", "b"),
+                      ...(test.equals ?? test.value),
+                    }
+                  : (test.equals ?? test.value),
+              );
             }
           }
         }
@@ -166,120 +201,25 @@ describe("zod", () => {
     });
   }
 
-  defineTest("any", z.any(), {
-    type: "any",
-    tests: [
-      testCase({ value: "Hello World" }),
-      testCase({ value: 12345 }),
-      testCase({ value: true }),
-      testCase({ value: false }),
-      testCase({ value: null }),
-      testCase({ value: undefined }),
-      testCase({ value: [] }),
-      testCase({ value: {} }),
-    ],
-  });
+  const ctx: common.CommonTestsContext = {
+    z,
+    defineTest,
+  };
 
-  defineTest("unknown", z.unknown(), {
-    type: "any",
-    tests: [
-      testCase({ value: "Hello World" }),
-      testCase({ value: 12345 }),
-      testCase({ value: true }),
-      testCase({ value: false }),
-      testCase({ value: null }),
-      testCase({ value: undefined }),
-      testCase({ value: [] }),
-      testCase({ value: {} }),
-    ],
-  });
-
-  defineTest("never", z.never(), {
-    type: "NONE",
-    tests: [
-      testCase({
-        value: undefined,
-      }),
-      testCase({
-        value: "Hello World",
-        error: /expected `NONE` but found `'Hello World'`/i,
-      }),
-      testCase({
-        value: 12345,
-        error: /expected `NONE` but found `12345`/i,
-      }),
-      testCase({
-        value: true,
-        error: /expected `NONE` but found `true`/i,
-      }),
-      testCase({
-        value: false,
-        error: /expected `NONE` but found `false`/i,
-      }),
-      testCase({
-        value: null,
-        error: /expected `NONE` but found `NULL`/i,
-      }),
-      testCase({
-        value: [],
-        error: /expected `NONE` but found `\[\]`/i,
-      }),
-      testCase({
-        value: {},
-        error: /expected `NONE` but found `{\s+}`/i,
-      }),
-    ],
-  });
-
-  // defineTest("NONE", z.undefined(), {
-  //   type: "NONE",
-  //   tests: {
-  //     passing: [{ value: undefined }],
-  //     failing: [
-  //       { value: null, error: /expected `NONE` but found `NULL`/i },
-  //       { value: 123, error: /expected `NONE` but found `123`/i },
-  //     ],
-  //   },
-  // });
-
-  // defineTest("NULL", z.null(), {
-  //   type: "NULL",
-  //   tests: {
-  //     passing: [{ value: null }],
-  //     failing: [
-  //       { value: undefined, error: /expected `NULL` but found `NONE`/i },
-  //       { value: 123, error: /expected `NULL` but found `123`/i },
-  //     ],
-  //   },
-  // });
-
-  defineTest("boolean", z.boolean(), {
-    type: "bool",
-    tests: [
-      testCase({ value: true }),
-      testCase({ value: false }),
-      testCase({ value: 123, error: /expected `bool` but found `123`/i }),
-    ],
-  });
-
-  defineTest("string", z.string(), {
-    type: "string",
-    tests: [
-      testCase({ value: "Hello World" }),
-      testCase({
-        value: true,
-        error: /expected `string` but found `true`/i,
-      }),
-      testCase({
-        value: null,
-        error: /expected `string` but found `NULL`/i,
-      }),
-      testCase({
-        value: undefined,
-        error: /expected `string` but found `NONE`/i,
-      }),
-    ],
-  });
+  common.any(ctx);
+  common.unknown(ctx);
+  common.never(ctx);
+  common.undefined(ctx);
+  common.optional(ctx);
+  common.nonoptional(ctx);
+  common.null(ctx);
+  common.nullable(ctx);
+  common.nullish(ctx);
+  common.boolean(ctx);
+  common.string(ctx);
+  common.number(ctx);
+  common.bigint(ctx);
+  // common.table();
 
   // defineTest("string [min:1]", z.string().min(1), {
   //   type: "string",
