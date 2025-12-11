@@ -1,3 +1,4 @@
+import * as z from "zod/v4";
 import * as sz from "./zod/schema";
-export { sz };
-export default sz;
+export { z, sz };
+export default z;

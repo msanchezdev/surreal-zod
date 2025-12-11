@@ -7,18 +7,28 @@ import {
   test,
 } from "bun:test";
 import dedent from "dedent";
-import { escapeIdent, RecordId, surql, Surreal, Table } from "surrealdb";
+import {
+  DateTime,
+  Decimal,
+  escapeIdent,
+  RecordId,
+  surql,
+  Surreal,
+} from "surrealdb";
 import z from "zod/v4";
 import type z4 from "zod/v4/core";
 import {
+  issue,
+  issues,
   startSurrealTestInstance,
+  testCase,
   type TestCaseChildField,
   type TestInstance,
   type ZodTest,
 } from "./utils";
-import * as common from "./common";
-import sz from "../src";
+import { sz } from "../src";
 import { SurrealZodTable } from "../src/zod/schema";
+import { registries } from "../src/registries";
 
 describe("zod", () => {
   let testInstance: TestInstance;
@@ -74,6 +84,7 @@ describe("zod", () => {
   ) {
     test(typeName, async () => {
       schemas = Array.isArray(schemas) ? schemas : [schemas];
+
       for (const schema of schemas) {
         const isTable = schema instanceof SurrealZodTable;
         const table = isTable
@@ -81,6 +92,17 @@ describe("zod", () => {
           : sz.table("test").fields({
               test: schema as any,
             });
+
+        if (expected.error) {
+          expect(() =>
+            table.toSurql("define", {
+              exists: "overwrite",
+              fields: true,
+            }),
+          ).toThrow(expected.error);
+          continue;
+        }
+
         const query = table.toSurql("define", {
           exists: "overwrite",
           fields: true,
@@ -117,7 +139,7 @@ describe("zod", () => {
           );
         }
         if (expected.children?.length) {
-          expectedQuery += "\n";
+          // expectedQuery += "\n";
           const childrenQueue = [
             ...expected.children.map((child) => ({
               ...child,
@@ -153,6 +175,32 @@ describe("zod", () => {
           for (let i = 0; i < expected.tests.length; i++) {
             // biome-ignore lint/style/noNonNullAssertion: bounds accounted for
             const test = expected.tests[i]!;
+            if (test.parse) {
+              // We will not support promises for now, this can be
+              // uncomented after support is added
+              // if (expected.async) {
+              //   const parse = await z.safeParseAsync(schema, test.value);
+              //   expect(parse).toMatchObject(
+              //     "data" in test.parse
+              //       ? { success: true, data: test.parse.data }
+              //       : {
+              //           success: false,
+              //           error: test.parse.error,
+              //         },
+              //   );
+              // } else {
+              const parse = z.safeParse(schema, test.value);
+              expect(parse).toMatchObject(
+                "data" in test.parse
+                  ? { success: true, data: test.parse.data }
+                  : {
+                      success: false,
+                      error: test.parse.error,
+                    },
+              );
+              // }
+            }
+
             const testCaseId = isTable
               ? new RecordId(tableName, `testcase_${i}`)
               : new RecordId("test", `testcase_${i}`);
@@ -201,707 +249,1668 @@ describe("zod", () => {
     });
   }
 
-  const ctx: common.CommonTestsContext = {
-    z,
-    defineTest,
-  };
+  defineTest("string", z.string(), {
+    type: "string",
+    tests: [
+      testCase({ value: "Hello World", parse: { data: "Hello World" } }),
+      testCase({
+        value: 12345,
+        parse: {
+          error: issues([issue.invalid_type("string")]),
+        },
+        error: /expected `string` but found `12345`/i,
+      }),
+      testCase({
+        value: true,
+        parse: {
+          error: issues([issue.invalid_type("string")]),
+        },
+        error: /expected `string` but found `true`/i,
+      }),
+      testCase({
+        value: null,
+        parse: {
+          error: issues([issue.invalid_type("string")]),
+        },
+        error: /expected `string` but found `null`/i,
+      }),
+      testCase({
+        value: undefined,
+        parse: {
+          error: issues([issue.invalid_type("string")]),
+        },
+        error: /expected `string` but found `none`/i,
+      }),
+    ],
+  });
 
-  common.any(ctx);
-  common.unknown(ctx);
-  common.never(ctx);
-  common.undefined(ctx);
-  common.optional(ctx);
-  common.nonoptional(ctx);
-  common.null(ctx);
-  common.nullable(ctx);
-  common.nullish(ctx);
-  common.boolean(ctx);
-  common.string(ctx);
-  common.number(ctx);
-  common.bigint(ctx);
-  // common.table();
+  // TODO: DB Validation?
+  defineTest("email", z.email(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "manuel@msanchez.dev",
+        parse: { data: "manuel@msanchez.dev" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("email")]),
+        },
+      }),
+    ],
+  });
 
-  // defineTest("string [min:1]", z.string().min(1), {
-  //   type: "string",
-  //   asserts: [checkMap.min_length("test", 1, "string")],
-  //   tests: {
-  //     passing: [{ value: "Hello World" }],
-  //     failing: [
-  //       {
-  //         value: "",
-  //         error: /must be at least 1 characters? long/i,
-  //       },
-  //     ],
-  //   },
-  // });
+  // TODO: DB Validation?
+  defineTest("guid", z.guid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "123e4567-e89b-42d3-a456-426614174000",
+        parse: { data: "123e4567-e89b-42d3-a456-426614174000" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("guid")]),
+        },
+      }),
+    ],
+  });
 
-  // defineTest("string [max:10]", z.string().max(10), {
-  //   type: "string",
-  //   asserts: [checkMap.max_length("test", 10, "string")],
-  //   tests: {
-  //     passing: [{ value: "Hello" }],
-  //     failing: [
-  //       {
-  //         value: "Hello World Hello World",
-  //         error: /must be at most 10 characters? long/i,
-  //       },
-  //     ],
-  //   },
-  // });
+  // TODO: DB Validation?
+  defineTest("uuid", z.uuid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "123e4567-e89b-42d3-a456-426614174000",
+        parse: { data: "123e4567-e89b-42d3-a456-426614174000" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("uuid")]),
+        },
+      }),
+    ],
+  });
 
-  // defineTest("string [min:1 max:10]", z.string().min(1).max(10), {
-  //   type: "string",
-  //   asserts: [
-  //     checkMap.min_length("test", 1, "string"),
-  //     checkMap.max_length("test", 10, "string"),
-  //   ],
-  //   tests: {
-  //     passing: [{ value: "Hello" }],
-  //     failing: [
-  //       {
-  //         value: "",
-  //         error: /must be at least 1 characters? long/i,
-  //       },
-  //       {
-  //         value: "12345678901",
-  //         error: /must be at most 10 characters? long/i,
-  //       },
-  //     ],
-  //   },
-  // });
+  // TODO: DB Validation?
+  defineTest("uuidv4", z.uuidv4(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "35a7ed3b-ac21-4c7f-8596-73610200deab",
+        parse: { data: "35a7ed3b-ac21-4c7f-8596-73610200deab" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("uuid")]),
+        },
+      }),
+    ],
+  });
 
-  // defineTest("string [length:10]", z.string().length(10), {
-  //   type: "string",
-  //   asserts: [checkMap.length_equals("test", 10)],
-  //   tests: {
-  //     passing: [{ value: "1234567890" }],
-  //     failing: [
-  //       { value: "123456789", error: /must be exactly 10 characters? long/i },
-  //       { value: "12345678901", error: /must be exactly 10 characters? long/i },
-  //     ],
-  //   },
-  // });
+  // TODO: DB Validation?
+  defineTest("uuidv6", z.uuidv6(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "1f0d507c-0afa-67f0-a264-115e8c51f2e4",
+        parse: { data: "1f0d507c-0afa-67f0-a264-115e8c51f2e4" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("uuid")]),
+        },
+      }),
+    ],
+  });
 
-  // defineTest("string [format:email]", [z.string().email(), z.email()], {
-  //   type: "string",
-  //   asserts: [checkMap.string_format.email("test")],
-  //   tests: {
-  //     passing: [
-  //       { value: "test@example.com" },
-  //       { value: "test+test@example.com" },
-  //       { value: "test.test@example.com" },
-  //     ],
-  //     failing: [
-  //       { value: "test", error: /must be a valid email address/i },
-  //       { value: "test@", error: /must be a valid email address/i },
-  //       { value: "@example", error: /must be a valid email address/i },
-  //       { value: "@example.com", error: /must be a valid email address/i },
-  //       { value: "test@example", error: /must be a valid email address/i },
-  //       { value: "test@example", error: /must be a valid email address/i },
-  //       { value: ".test@example", error: /must be a valid email address/i },
-  //       { value: "te..st@example", error: /must be a valid email address/i },
-  //     ],
-  //   },
-  // });
+  // TODO: DB Validation?
+  defineTest("uuidv7", z.uuidv7(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "019b036b-980f-701e-8fef-6570a0d9a371",
+        parse: { data: "019b036b-980f-701e-8fef-6570a0d9a371" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("uuid")]),
+        },
+      }),
+    ],
+  });
 
-  // defineTest("string [format:url]", [z.string().url(), z.url()], {
-  //   type: "string",
-  //   asserts: [checkMap.string_format.url("test")],
-  //   tests: {
-  //     passing: [
-  //       { value: "http://example" },
-  //       { value: "http://example.com" },
-  //       { value: "http://example.com/api/users" },
-  //       { value: "http://example.com/api/users?page=1&limit=10#data" },
-  //       { value: "http://example.com/api/users#data" },
-  //       { value: "http://example.com/api/users?page=1&limit=10#data" },
-  //       { value: "file:/" },
-  //       { value: "file:/path/to/file" },
-  //       { value: "file:///path/to/file" },
-  //     ],
-  //     failing: [
-  //       { value: "http", error: /must be a valid URL/i },
-  //       { value: "http:", error: /must be a valid URL/i },
-  //       { value: "http:/", error: /must be a valid URL/i },
-  //       { value: "http://", error: /must be a valid URL/i },
-  //     ],
-  //   },
-  // });
+  // TODO: DB Validation?
+  // TODO: Normalization?
+  defineTest("url", z.url(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "https://www.google.com",
+        parse: { data: "https://www.google.com" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("url")]),
+        },
+      }),
+    ],
+  });
 
+  // TODO: DB Validation?
+  defineTest("emoji", z.emoji(), {
+    type: "string",
+    tests: [
+      testCase({ value: "👋", parse: { data: "👋" } }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("emoji")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("nanoid", z.nanoid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "QvqDj2zWl5b8Vj1hcxBmn",
+        parse: { data: "QvqDj2zWl5b8Vj1hcxBmn" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("nanoid")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation? TODO: Properly implement
+  defineTest("cuid", z.cuid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "clhqxk9zr0000qzrmn831i7rn",
+        parse: { data: "clhqxk9zr0000qzrmn831i7rn" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("cuid")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("cuid2", z.cuid2(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "tz4a98xxat96iws9zmbrgj3a",
+        parse: { data: "tz4a98xxat96iws9zmbrgj3a" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("cuid2")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("ulid", z.ulid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        parse: { data: "01ARZ3NDEKTSV4RRFFQ69G5FAV" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("ulid")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("xid", z.xid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "9m4e2mr0ui3e8a215n4g",
+        parse: { data: "9m4e2mr0ui3e8a215n4g" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("xid")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("ksuid", z.ksuid(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "0ujsszwN8NRY24YaXiTIE2VWDTS",
+        parse: { data: "0ujsszwN8NRY24YaXiTIE2VWDTS" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("ksuid")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("ipv4", z.ipv4(), {
+    type: "string",
+    tests: [
+      testCase({ value: "192.168.1.1", parse: { data: "192.168.1.1" } }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("ipv4")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("mac", z.mac(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "00:00:00:00:00:00",
+        parse: { data: "00:00:00:00:00:00" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("mac")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("ipv6", z.ipv6(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+        parse: { data: "2001:0db8:85a3:0000:0000:8a2e:0370:7334" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("ipv6")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("cidrv4", z.cidrv4(), {
+    type: "string",
+    tests: [
+      testCase({ value: "192.168.1.1/24", parse: { data: "192.168.1.1/24" } }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("cidrv4")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("cidrv6", z.cidrv6(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "2001:0db8:85a3:0000:0000:8a2e:0370:7334/64",
+        parse: { data: "2001:0db8:85a3:0000:0000:8a2e:0370:7334/64" },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("cidrv6")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: Properly implement
+  defineTest("base64", z.base64(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "SGVsbG8gV29ybGQ=",
+        parse: { data: "SGVsbG8gV29ybGQ=" },
+      }),
+      testCase({
+        value: "??",
+        parse: {
+          error: issues([issue.invalid_format("base64")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("base64url", z.base64url(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "SGVsbG8gV29ybGQ",
+        parse: { data: "SGVsbG8gV29ybGQ" },
+      }),
+      testCase({
+        value: "??",
+        parse: {
+          error: issues([issue.invalid_format("base64url")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("e164", z.e164(), {
+    type: "string",
+    tests: [
+      testCase({ value: "+12345678901", parse: { data: "+12345678901" } }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("e164")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("jwt", z.jwt(), {
+    type: "string",
+    tests: [
+      testCase({
+        value:
+          "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        parse: {
+          data: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+        },
+      }),
+      testCase({
+        value: "",
+        parse: {
+          error: issues([issue.invalid_format("jwt")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest(
+    "stringFormat",
+    z.stringFormat("lowercase", (value) => value.toLowerCase() === value),
+    {
+      type: "string",
+      tests: [
+        testCase({ value: "hello world", parse: { data: "hello world" } }),
+        testCase({
+          value: "Hello World",
+          parse: {
+            error: issues([issue.invalid_format("lowercase")]),
+          },
+        }),
+      ],
+    },
+  );
+
+  // TODO: Properly implement
+  defineTest("hostname", z.hostname(), {
+    type: "string",
+    tests: [
+      testCase({ value: "www.google.com", parse: { data: "www.google.com" } }),
+    ],
+  });
+
+  // TODO: Properly implement
+  defineTest("hex", z.hex(), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "1234567890abcdef",
+        parse: { data: "1234567890abcdef" },
+      }),
+      testCase({
+        value: "1234567890ghijkl",
+        parse: {
+          error: issues([issue.invalid_format("hex")]),
+        },
+      }),
+    ],
+  });
+
+  // TODO: Properly implement
+  defineTest("hash", z.hash("md5", { enc: "hex" }), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "b10a8db164e0754105b7a99be72e3fe5",
+        parse: { data: "b10a8db164e0754105b7a99be72e3fe5" },
+      }),
+      testCase({
+        value: "1234567890ghijkl",
+        parse: {
+          error: issues([issue.invalid_format("md5_hex")]),
+        },
+      }),
+    ],
+  });
+
+  defineTest("number", z.number(), {
+    type: "number",
+    tests: [
+      testCase({ value: 123, parse: { data: 123 } }),
+      testCase({ value: 123.456, parse: { data: 123.456 } }),
+      testCase({ value: -123.456, parse: { data: -123.456 } }),
+      testCase({ value: Math.E, parse: { data: Math.E } }),
+      testCase({ value: Math.PI, parse: { data: Math.PI } }),
+      testCase({ value: Math.LN2, parse: { data: Math.LN2 } }),
+      testCase({ value: Math.LN10, parse: { data: Math.LN10 } }),
+      testCase({ value: Math.LOG2E, parse: { data: Math.LOG2E } }),
+      testCase({ value: Math.LOG10E, parse: { data: Math.LOG10E } }),
+      testCase({ value: Math.SQRT1_2, parse: { data: Math.SQRT1_2 } }),
+      testCase({ value: Math.SQRT2, parse: { data: Math.SQRT2 } }),
+      testCase({
+        value: Number.MAX_SAFE_INTEGER,
+        parse: { data: Number.MAX_SAFE_INTEGER },
+      }),
+      testCase({
+        value: Number.MIN_SAFE_INTEGER,
+        parse: { data: Number.MIN_SAFE_INTEGER },
+      }),
+      // NOTE: SurrealDB.js throws: Number too big to be encoded
+      // testCase({
+      //   value: Number.MAX_VALUE,
+      //   parse: { data: Number.MAX_VALUE },
+      // }),
+      testCase({
+        value: Number.MIN_VALUE,
+        parse: { data: Number.MIN_VALUE },
+      }),
+      testCase({
+        value: "123",
+        parse: {
+          error: issues([issue.invalid_type("number")]),
+        },
+        error: /expected `number` but found `'123'`/i,
+      }),
+      testCase({
+        value: true,
+        parse: {
+          error: issues([issue.invalid_type("number")]),
+        },
+        error: /expected `number` but found `true`/i,
+      }),
+      testCase({ value: null, error: /expected `number` but found `null`/i }),
+    ],
+  });
+
+  defineTest("int", z.int(), {
+    type: "int",
+    tests: [
+      testCase({ value: 123, parse: { data: 123 } }),
+      testCase({
+        value: 123.456,
+        parse: {
+          error: issues([issue.invalid_type("int")]),
+        },
+        error: /expected `int` but found `123.456f`/i,
+      }),
+      testCase({
+        value: -123.456,
+        parse: { error: issues([issue.invalid_type("int")]) },
+        error: /expected `int` but found `-123.456f`/i,
+      }),
+      testCase({
+        value: Number.MAX_SAFE_INTEGER,
+        parse: { data: Number.MAX_SAFE_INTEGER },
+      }),
+      testCase({
+        value: Number.MIN_SAFE_INTEGER,
+        parse: { data: Number.MIN_SAFE_INTEGER },
+      }),
+      testCase({
+        value: Number.MAX_SAFE_INTEGER + 1,
+        parse: { error: issues([issue.too_big(Number.MAX_SAFE_INTEGER)]) },
+        // FIXME: SurrealDB should error instead but passes as surrealdb's number
+        // supports any size
+        // error: /expected `int` but found `Number.MAX_SAFE_INTEGER + 1`/i,
+      }),
+      testCase({
+        value: Number.MIN_SAFE_INTEGER - 1,
+        parse: { error: issues([issue.too_small(Number.MIN_SAFE_INTEGER)]) },
+        // FIXME: SurrealDB should error instead but passes as surrealdb's number
+        // supports any size
+        // error: /expected `int` but found `Number.MIN_SAFE_INTEGER - 1`/i,
+      }),
+    ],
+  });
+
+  defineTest("float32", z.float32(), {
+    type: "float",
+    tests: [
+      testCase({ value: 123, parse: { data: 123 } }),
+      testCase({ value: 123.456, parse: { data: 123.456 } }),
+      testCase({ value: -123.456, parse: { data: -123.456 } }),
+      testCase({
+        value: Number.MAX_SAFE_INTEGER,
+        parse: { data: Number.MAX_SAFE_INTEGER },
+      }),
+      testCase({
+        value: Number.MIN_SAFE_INTEGER,
+        parse: { data: Number.MIN_SAFE_INTEGER },
+      }),
+      // testCase({
+      //   value: Number.MIN_SAFE_INTEGER - 1,
+      //   parse: { error: issues([issue.too_small(Number.MIN_SAFE_INTEGER)]) },
+      // }),
+    ],
+  });
+
+  // TODO: Test saturation/overflow
+  defineTest("float64", z.float64(), {
+    type: "float",
+    tests: [
+      testCase({ value: 123, parse: { data: 123 } }),
+      testCase({ value: 123.456, parse: { data: 123.456 } }),
+      testCase({ value: -123.456, parse: { data: -123.456 } }),
+      testCase({
+        value: Number.MAX_SAFE_INTEGER,
+        parse: { data: Number.MAX_SAFE_INTEGER },
+      }),
+      testCase({
+        value: Number.MIN_SAFE_INTEGER,
+        parse: { data: Number.MIN_SAFE_INTEGER },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("int32", z.int32(), {
+    type: "int",
+    tests: [
+      testCase({ value: 123, parse: { data: 123 } }),
+      testCase({
+        value: Number((1n << 31n) - 1n),
+        parse: { data: Number((1n << 31n) - 1n) },
+      }),
+      testCase({
+        value: Number(1n << 31n),
+        parse: { error: issues([issue.too_big(Number((1n << 31n) - 1n))]) },
+      }),
+      testCase({
+        value: Number(-1n << 31n),
+        parse: { data: Number(-1n << 31n) },
+      }),
+      testCase({
+        value: Number((-1n << 31n) - 1n),
+        parse: { error: issues([issue.too_small(Number(-1n << 31n))]) },
+      }),
+    ],
+  });
+
+  // TODO: DB Validation?
+  defineTest("uint32", z.uint32(), {
+    type: "int",
+    tests: [
+      testCase({ value: 123, parse: { data: 123 } }),
+      testCase({
+        value: Number((1n << 32n) - 1n),
+        parse: { data: Number((1n << 32n) - 1n) },
+      }),
+      testCase({
+        value: Number(1n << 32n),
+        parse: { error: issues([issue.too_big(Number((1n << 32n) - 1n))]) },
+      }),
+      testCase({
+        value: -1,
+        parse: { error: issues([issue.too_small(0)]) },
+      }),
+    ],
+  });
+
+  defineTest("boolean", z.boolean(), {
+    type: "bool",
+    tests: [
+      testCase({ value: true, parse: { data: true } }),
+      testCase({ value: false, parse: { data: false } }),
+      testCase({
+        value: 123,
+        parse: { error: issues([issue.invalid_type("boolean")]) },
+        error: /expected `bool` but found `123`/i,
+      }),
+    ],
+  });
+
+  defineTest("bigint", z.bigint(), {
+    type: "int",
+    tests: [
+      testCase({
+        value: 123n,
+        parse: { data: 123n },
+        // @ts-expect-error - surrealdb returns number or bigint depending on the value
+        equals: 123,
+      }),
+      testCase({
+        value: 123,
+        parse: {
+          error: issues([issue.invalid_type("bigint")]),
+        },
+        equals: 123,
+      }),
+      testCase({
+        value: "Hello World",
+        error: /expected `int` but found `'Hello World'`/i,
+      }),
+      testCase({ value: true, error: /expected `int` but found `true`/i }),
+      testCase({ value: null, error: /expected `int` but found `null`/i }),
+      testCase({
+        value: undefined,
+        error: /expected `int` but found `none`/i,
+      }),
+    ],
+  });
+
+  defineTest("int64", z.int64(), {
+    type: "int",
+    tests: [
+      testCase({
+        value: (1n << 63n) - 1n,
+        parse: { data: (1n << 63n) - 1n },
+      }),
+      testCase({
+        value: 9223372036854775808n,
+        parse: {
+          error: issues([issue.too_big(9223372036854775807n)]),
+        },
+        // BUG_REPORT: SurrealDB overflows and starts counting from negative.
+        // This will break if they fix it.
+        equals: -9223372036854775808n,
+      }),
+    ],
+  });
+
+  // May needs patching to work with SurrealDB. As surrealdb doesnt support unsigned int.
+  // An option would be to use decimal but that may break something on the db side if user is not aware.
+  defineTest("uint64", z.uint64(), {
+    type: "int",
+    tests: [
+      testCase({
+        value: (1n << 64n) - 1n,
+        parse: { data: (1n << 64n) - 1n },
+        // NOTE: SurrealDB doesnt support unsigned int so it just overflows.
+        // We will accept this for now.
+        // @ts-expect-error ignore bigint to number conversion
+        equals: -1,
+      }),
+      // testCase({
+      //   value: 9223372036854775808n,
+      //   parse: {
+      //     error: issues([issue.too_big(9223372036854775807n)]),
+      //   },
+      //   // BUG_REPORT: SurrealDB overflows and starts counting from negative.
+      //   // This will break if they fix it.
+      //   equals: -9223372036854775808n,
+      // }),
+    ],
+  });
+
+  defineTest("symbol", z.symbol(), {
+    error: /Symbol type cannot be used as a field type/i,
+  });
+
+  defineTest("undefined", z.undefined(), {
+    type: "none",
+    tests: [
+      testCase({ value: undefined }),
+      testCase({ value: null, error: /expected `none` but found `null`/i }),
+      testCase({ value: 123, error: /expected `none` but found `123`/i }),
+      testCase({ value: true, error: /expected `none` but found `true`/i }),
+      testCase({ value: false, error: /expected `none` but found `false`/i }),
+      testCase({ value: [], error: /expected `none` but found `\[\]`/i }),
+      testCase({ value: {}, error: /expected `none` but found `{\s+}`/i }),
+    ],
+  });
+
+  const anyTests = [
+    testCase({ value: "Hello World" }),
+    testCase({ value: 12345 }),
+    testCase({ value: true }),
+    testCase({ value: false }),
+    testCase({ value: null }),
+    testCase({ value: undefined }),
+    testCase({ value: [] }),
+    testCase({ value: {} }),
+  ];
+
+  defineTest("any", z.any(), {
+    type: "any",
+    tests: anyTests,
+  });
+
+  defineTest("unknown", z.unknown(), {
+    type: "any",
+    tests: anyTests,
+  });
+
+  defineTest("never", z.never(), {
+    type: "none",
+    tests: [
+      testCase({
+        value: undefined,
+      }),
+      testCase({
+        value: "Hello World",
+        error: /expected `none` but found `'Hello World'`/i,
+      }),
+      testCase({
+        value: 12345,
+        error: /expected `none` but found `12345`/i,
+      }),
+      testCase({
+        value: true,
+        error: /expected `none` but found `true`/i,
+      }),
+      testCase({
+        value: false,
+        error: /expected `none` but found `false`/i,
+      }),
+      testCase({
+        value: null,
+        error: /expected `none` but found `NULL`/i,
+      }),
+      testCase({
+        value: [],
+        error: /expected `none` but found `\[\]`/i,
+      }),
+      testCase({
+        value: {},
+        error: /expected `none` but found `{\s+}`/i,
+      }),
+    ],
+  });
+
+  defineTest("void", z.void(), {
+    type: "none",
+    tests: [
+      testCase({
+        value: undefined,
+      }),
+      testCase({
+        value: "Hello World",
+        error: /expected `none` but found `'Hello World'`/i,
+      }),
+      testCase({
+        value: 12345,
+        error: /expected `none` but found `12345`/i,
+      }),
+      testCase({
+        value: true,
+        error: /expected `none` but found `true`/i,
+      }),
+      testCase({
+        value: false,
+        error: /expected `none` but found `false`/i,
+      }),
+      testCase({
+        value: null,
+        error: /expected `none` but found `NULL`/i,
+      }),
+      testCase({
+        value: [],
+        error: /expected `none` but found `\[\]`/i,
+      }),
+      testCase({
+        value: {},
+        error: /expected `none` but found `{\s+}`/i,
+      }),
+    ],
+  });
+
+  defineTest("date", z.date(), {
+    type: "datetime",
+    tests: [
+      testCase({
+        value: new Date("2025-01-01T00:00:00.000Z"),
+        parse: { data: new Date("2025-01-01T00:00:00.000Z") },
+        // @ts-expect-error - surrealdb does type conversion from date to datetime
+        // this might be troublesome, needs overriding
+        equals: new DateTime("2025-01-01T00:00:00.000Z"),
+      }),
+    ],
+  });
+
+  describe("array", () => {
+    defineTest("array<any>", z.array(z.any()), {
+      type: "array",
+      tests: [
+        testCase({
+          value: ["Hello World", 12345, true, false, null, undefined],
+          parse: { data: ["Hello World", 12345, true, false, null, undefined] },
+        }),
+      ],
+    });
+    defineTest("array<string>", z.array(z.string()), {
+      type: "array<string>",
+      tests: [testCase({ value: ["Hello World", "Hello", "World"] })],
+    });
+    defineTest("array<number>", z.array(z.number()), {
+      type: "array<number>",
+      tests: [testCase({ value: [1, 2, 3] })],
+    });
+    defineTest("array<boolean>", z.array(z.boolean()), {
+      type: "array<bool>",
+      tests: [
+        testCase({ value: [true, false] }),
+        testCase({
+          value: [1, 2, 3],
+          error: /expected `bool` but found `1`/i,
+        }),
+      ],
+    });
+  });
+
+  defineTest(
+    "keyof { name: string, age: number }",
+    z.keyof(z.object({ name: z.string(), age: z.number() })),
+    {
+      type: '"name" | "age"',
+      tests: [
+        testCase({ value: "name" }),
+        testCase({ value: "age" }),
+        testCase({
+          value: "unknown",
+          error: /expected `'name' | 'age'` but found `'unknown'`/i,
+        }),
+      ],
+    },
+  );
+
+  defineTest(
+    "object { name: string, age: number }",
+    z.object({ name: z.string(), age: z.number() }),
+    {
+      type: "object",
+      children: [
+        { name: "name", type: "string" },
+        { name: "age", type: "number" },
+      ],
+      tests: [
+        testCase({ value: { name: "John Doe", age: 17 } }),
+        testCase({
+          value: {
+            name: "John Doe",
+            age: 17,
+            meta: { created: new Date("2025-01-01T00:00:00.000Z") },
+          },
+          equals: {
+            name: "John Doe",
+            age: 17,
+            meta: { created: new DateTime("2025-01-01T00:00:00.000Z") },
+          },
+          // @FIXME should error, but we dont know how to make objects strict
+          // current syntax with object literal doesnt work properly
+          // error:
+          //   /but found .*? meta: \{ created: d'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,})?Z' \}/i,
+        }),
+      ],
+    },
+  );
+
+  defineTest(
+    "strict object { name: string, age: number | none }",
+    z.strictObject({ name: z.string(), age: z.number().optional() }),
+    {
+      type: "object",
+      children: [
+        { name: "name", type: "string" },
+        { name: "age", type: "number | none" },
+      ],
+      tests: [
+        testCase({ value: { name: "John Doe", age: 17 } }),
+        testCase({
+          value: {
+            name: "John Doe",
+            age: 17,
+            meta: { created: new Date("2025-01-01T00:00:00.000Z") },
+          },
+          parse: {
+            error: issues([issue.unrecognized_keys(["meta"])]),
+          },
+          equals: {
+            name: "John Doe",
+            age: 17,
+            meta: { created: new DateTime("2025-01-01T00:00:00.000Z") },
+          },
+          // @FIXME should error, but we dont know how to make objects strict
+          // current syntax with object literal doesnt work properly
+          // error:
+          //   /but found .*? meta: \{ created: d'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,})?Z' \}/i,
+        }),
+      ],
+    },
+  );
+
+  defineTest(
+    "loose object { name: string, age: number }",
+    z.looseObject({ name: z.string(), age: z.number() }),
+    {
+      type: "object",
+      children: [
+        { name: "name", type: "string" },
+        { name: "age", type: "number" },
+      ],
+      tests: [
+        testCase({ value: { name: "John Doe", age: 17 } }),
+        testCase({
+          value: {
+            name: "John Doe",
+            age: 17,
+            meta: { created: new Date("2025-01-01T00:00:00.000Z") },
+          },
+          parse: {
+            data: {
+              name: "John Doe",
+              age: 17,
+              meta: { created: new Date("2025-01-01T00:00:00.000Z") },
+            },
+          },
+          equals: {
+            name: "John Doe",
+            age: 17,
+            meta: { created: new DateTime("2025-01-01T00:00:00.000Z") },
+          },
+        }),
+      ],
+    },
+  );
+
+  describe("union", () => {
+    defineTest("string | number", z.union([z.string(), z.number()]), {
+      type: "string | number",
+      tests: [testCase({ value: "Hello World" }), testCase({ value: 12345 })],
+    });
+
+    defineTest(
+      "string | number | boolean",
+      z.union([z.string(), z.number(), z.boolean()]),
+      {
+        type: "string | number | bool",
+        tests: [
+          testCase({ value: "Hello World" }),
+          testCase({ value: 12345 }),
+          testCase({ value: true }),
+        ],
+      },
+    );
+
+    defineTest("string | undefined", z.string().optional(), {
+      type: "string | none",
+      tests: [
+        testCase({ value: "Hello World" }),
+        testCase({ value: undefined }),
+      ],
+    });
+
+    defineTest("string | null", z.string().nullable(), {
+      type: "string | null",
+      tests: [testCase({ value: "Hello World" }), testCase({ value: null })],
+    });
+
+    defineTest("string | null | undefined", z.string().nullish(), {
+      type: "string | null | none",
+      tests: [
+        testCase({ value: "Hello World" }),
+        testCase({ value: null }),
+        testCase({ value: undefined }),
+      ],
+    });
+
+    // REVISIT
+    // defineTest(
+    //   "{ type: 'number', value: number } | { type: 'string', value: string }",
+    //   z.discriminatedUnion("type", [
+    //     z.object({ type: z.literal("number"), value: z.number() }),
+    //     z.object({ type: z.literal("string"), value: z.string() }),
+    //   ]),
+    //   {
+    //     type: "{ type: 'number', value: number } | { type: 'string', value: string }",
+    //     tests: [
+    //       testCase({ value: { type: "number", value: 12345 } }),
+    //       testCase({ value: { type: "string", value: "Hello World" } }),
+    //     ],
+    //   },
+    // );
+  });
+
+  describe("intersection", () => {
+    defineTest(
+      // TODO: After finding a way to handle intersections
+      "(string | number) & (string | boolean)",
+      z.intersection(z.string().or(z.number()), z.string().or(z.boolean())),
+      {
+        // TODO: After finding a way to handle intersections
+        // type: "string | number | bool",
+        type: "any",
+        tests: [
+          testCase({ value: "Hello World", parse: { data: "Hello World" } }),
+          testCase({
+            value: 12345,
+            parse: {
+              error: issues([
+                issue.invalid_union(
+                  [issue.invalid_type("string")],
+                  [issue.invalid_type("boolean")],
+                ),
+              ]),
+            },
+          }),
+          // testCase({
+          //   value: true,
+          //   parse: { error: issues([issue.invalid_type("number")]) },
+          // }),
+        ],
+      },
+    );
+    // defineTest("{ name: string, age: number } & { name: string, age: number | none }", z.intersection([z.string(), z.number(), z.boolean()]), {
+    //   type: "string & number & bool",
+    //   tests: [testCase({ value: "Hello World" }), testCase({ value: 12345 }), testCase({ value: true })],
+    // });
+    // defineTest("string & undefined", z.string().optional(), {
+    //   type: "string & none",
+    //   tests: [testCase({ value: "Hello World" }), testCase({ value: undefined })],
+    // });
+  });
+
+  describe("tuple", () => {
+    defineTest("[any]", z.tuple([z.any()]), {
+      type: "[any]",
+      tests: [
+        testCase({
+          value: ["Hello World"],
+          parse: { data: ["Hello World"] },
+        }),
+        testCase({
+          value: [12345],
+          parse: { data: [12345] },
+        }),
+      ],
+    });
+
+    defineTest("[string, number]", z.tuple([z.string(), z.number()]), {
+      type: "[string, number]",
+      tests: [
+        testCase({
+          value: ["Hello World", 12345],
+          parse: { data: ["Hello World", 12345] },
+        }),
+        testCase({
+          value: [12345, "Hello World"],
+          parse: {
+            error: issues([
+              issue.invalid_type("string"),
+              issue.invalid_type("number"),
+            ]),
+          },
+          error:
+            /expected `\[string, number\]` but found `\[12345, 'Hello World'\]`/i,
+        }),
+      ],
+    });
+
+    // TODO: Tuples with rest elements are not supported yet
+    defineTest("[string, ...number]", z.tuple([z.string()]).rest(z.number()), {
+      type: "array",
+      tests: [testCase({ value: ["Hello World", 12345] })],
+    });
+  });
+
+  describe("record", () => {
+    defineTest(
+      `record<"2025-01" | "2025-02" | "2025-03" | "2025-04", number>`,
+      z.record(
+        z.enum(["2025-01", "2025-02", "2025-03", "2025-04"]),
+        z.number(),
+      ),
+      {
+        type: "object",
+        children: [{ name: "*", type: "number" }],
+        tests: [
+          testCase({
+            value: {
+              "2025-01": 100,
+              "2025-02": 88,
+              "2025-03": 99,
+              "2025-04": 60,
+            },
+            parse: {
+              data: {
+                "2025-01": 100,
+                "2025-02": 88,
+                "2025-03": 99,
+                "2025-04": 60,
+              },
+            },
+          }),
+        ],
+      },
+    );
+    defineTest("record<string, number>", z.record(z.string(), z.number()), {
+      type: "object",
+      children: [{ name: "*", type: "number" }],
+      tests: [
+        testCase({
+          value: {
+            "2025-01": 100,
+            "2025-02": 88,
+            "2025-03": 99,
+            "2025-04": 60,
+          },
+          parse: {
+            data: {
+              "2025-01": 100,
+              "2025-02": 88,
+              "2025-03": 99,
+              "2025-04": 60,
+            },
+          },
+        }),
+        testCase({
+          value: {
+            "2025-01": "100",
+            "2025-02": "88",
+            "2025-03": "99",
+            "2025-04": "60",
+          },
+          parse: {
+            error: issues([issue.invalid_type("number")]),
+          },
+          error: /expected `number` but found `'100'`/i,
+        }),
+      ],
+    });
+    defineTest(
+      "record<number, number>",
+      z.record(z.coerce.number(), z.number()),
+      {
+        type: "object",
+        children: [{ name: "*", type: "number" }],
+        tests: [
+          testCase({
+            value: { 1: 100, 2: 88, 3: 99, 4: 60 },
+            parse: {
+              data: { 1: 100, 2: 88, 3: 99, 4: 60 },
+            },
+          }),
+        ],
+      },
+    );
+  });
+
+  describe("partial record", () => {
+    defineTest(
+      `partial record<"2025-01" | "2025-02" | "2025-03" | "2025-04", number>`,
+      z.partialRecord(
+        z.enum(["2025-01", "2025-02", "2025-03", "2025-04"]),
+        z.number(),
+      ),
+      {
+        type: "object",
+        children: [{ name: "*", type: "number" }],
+        tests: [
+          testCase({
+            value: {
+              "2025-01": 100,
+              "2025-02": 88,
+              "2025-03": 99,
+            },
+            parse: {
+              data: {
+                "2025-01": 100,
+                "2025-02": 88,
+                "2025-03": 99,
+              },
+            },
+          }),
+        ],
+      },
+    );
+
+    defineTest(
+      "partial record<string, number>",
+      z.partialRecord(z.string(), z.number()),
+      {
+        type: "object",
+        children: [{ name: "*", type: "number" }],
+        tests: [
+          testCase({
+            value: {
+              "2025-01": 100,
+              "2025-02": 88,
+              "2025-03": 99,
+            },
+            parse: {
+              data: {
+                "2025-01": 100,
+                "2025-02": 88,
+                "2025-03": 99,
+              },
+            },
+          }),
+        ],
+      },
+    );
+    defineTest(
+      "partial record<number, number>",
+      z.partialRecord(z.coerce.number(), z.number()),
+      {
+        type: "object",
+        children: [{ name: "*", type: "number" }],
+        tests: [
+          testCase({
+            value: { 1: 100, 2: 88, 3: 99 },
+            parse: {
+              data: { 1: 100, 2: 88, 3: 99 },
+            },
+          }),
+        ],
+      },
+    );
+  });
+
+  describe("map", () => {
+    defineTest("map<string, number>", z.map(z.string(), z.number()), {
+      type: "object",
+      children: [{ name: "*", type: "number" }],
+      tests: [
+        testCase({
+          value: new Map([
+            ["Hello World", 100],
+            ["Hello World 2", 88],
+            ["Hello World 3", 99],
+          ]),
+          equals: {
+            // @ts-expect-error - surrealdb does not support Maps so we use objects
+            "Hello World": 100,
+            "Hello World 2": 88,
+            "Hello World 3": 99,
+          },
+        }),
+      ],
+    });
+    defineTest("map<number, number>", z.map(z.number(), z.number()), {
+      type: "object",
+      children: [{ name: "*", type: "number" }],
+      tests: [
+        testCase({
+          value: new Map([
+            ["1", 100],
+            ["2", 88],
+            ["3", 99],
+          ]),
+          equals: {
+            // @ts-expect-error - surrealdb does not support Maps so we use objects
+            1: 100,
+            2: 88,
+            3: 99,
+          },
+        }),
+      ],
+    });
+    defineTest(
+      "map<{ user_id: number }, number>",
+      z.map(z.object({ user_id: z.number() }), z.number()),
+      {
+        type: "object",
+        children: [{ name: "*", type: "number" }],
+        error: /Unsupported key type: object/i,
+      },
+    );
+  });
+
+  // FIXME: They are currently buggy in SurrealDB, lets use arrays for now
+  describe("set", () => {
+    defineTest("set<string>", z.set(z.string()), {
+      type: "array<string>",
+      tests: [
+        testCase({
+          value: [
+            ...new Set(["Hello World", "Hello World 2", "Hello World 3"]),
+          ],
+          // parse: {
+          //   data: new Set(["Hello World", "Hello World 2", "Hello World 3"]),
+          // },
+        }),
+      ],
+    });
+  });
+
+  describe("enum", () => {
+    defineTest(
+      "'active' | 'inactive' | 'pending'",
+      z.enum(["active", "inactive", "pending"]),
+      {
+        type: `"active" | "inactive" | "pending"`,
+        tests: [
+          testCase({ value: "active" }),
+          testCase({ value: "inactive" }),
+          testCase({ value: "pending" }),
+          testCase({
+            value: "unknown",
+            parse: {
+              error: issues([
+                issue.invalid_value(["active", "inactive", "pending"]),
+              ]),
+            },
+            error:
+              /expected `'active' | 'inactive' | 'pending'` but found `'unknown'`/i,
+          }),
+        ],
+      },
+    );
+  });
+
+  describe("nativeEnum", () => {
+    defineTest(
+      "nativeEnum<'active' | 'inactive' | 'pending'>",
+      z.nativeEnum({
+        active: "active",
+        inactive: "inactive",
+        pending: "pending",
+      }),
+      {
+        type: `"active" | "inactive" | "pending"`,
+        tests: [
+          testCase({ value: "active" }),
+          testCase({ value: "inactive" }),
+          testCase({ value: "pending" }),
+        ],
+      },
+    );
+  });
+
+  describe("literal", () => {
+    defineTest("'active'>", z.literal("active"), {
+      type: `"active"`,
+      tests: [
+        testCase({ value: "active", parse: { data: "active" } }),
+        testCase({
+          value: "inactive",
+          parse: { error: issues([issue.invalid_value(["active"])]) },
+          error: /expected `'active'` but found `'inactive'`/i,
+        }),
+      ],
+    });
+
+    defineTest(
+      "'active' | 'inactive' | 'pending'>",
+      z.literal(["active", "inactive", "pending"]),
+      {
+        type: `"active" | "inactive" | "pending"`,
+        tests: [
+          testCase({ value: "active", parse: { data: "active" } }),
+          testCase({ value: "inactive", parse: { data: "inactive" } }),
+          testCase({ value: "pending", parse: { data: "pending" } }),
+          testCase({
+            value: "unknown",
+            parse: {
+              error: issues([
+                issue.invalid_value(["active", "inactive", "pending"]),
+              ]),
+            },
+            error:
+              /expected `'active' | 'inactive' | 'pending'` but found `'unknown'`/i,
+          }),
+        ],
+      },
+    );
+  });
+
+  defineTest("file", z.file(), {
+    error: /File type cannot be used as a field type/i,
+  });
+
+  defineTest(
+    "transform",
+    z.transform((value: string) => value.toUpperCase()),
+    {
+      type: "any",
+    },
+  );
+
+  defineTest("optional", z.optional(z.string()), {
+    type: "string | none",
+    tests: [
+      testCase({ value: "Hello World", parse: { data: "Hello World" } }),
+      testCase({ value: undefined, parse: { data: undefined } }),
+    ],
+  });
+
+  defineTest("nullable", z.nullable(z.string()), {
+    type: "string | null",
+    tests: [
+      testCase({ value: "Hello World", parse: { data: "Hello World" } }),
+      testCase({ value: null, parse: { data: null } }),
+    ],
+  });
+
+  defineTest("nullish", z.nullish(z.string()), {
+    type: "string | null | none",
+    tests: [
+      testCase({ value: "Hello World", parse: { data: "Hello World" } }),
+      testCase({ value: null, parse: { data: null } }),
+      testCase({ value: undefined, parse: { data: undefined } }),
+    ],
+  });
+
+  defineTest("default", z._default(z.string(), "Hello World"), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "Hello World",
+        parse: { data: "Hello World" },
+      }),
+      testCase({
+        value: "Hello World 2",
+        parse: { data: "Hello World 2" },
+      }),
+    ],
+  });
+
+  defineTest("prefault", z.prefault(z.string(), "Hello World"), {
+    type: "string",
+    tests: [
+      testCase({ value: "Hello World", parse: { data: "Hello World" } }),
+      testCase({ value: "Hello World 2", parse: { data: "Hello World 2" } }),
+    ],
+  });
+
+  defineTest("nonoptional", z.nonoptional(z.string()), {
+    type: "string",
+    tests: [testCase({ value: "Hello World", parse: { data: "Hello World" } })],
+  });
+
+  defineTest("success", z.success(z.string()), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "Hello World",
+        // @ts-expect-error - this just turns into true on a successful parse
+        parse: { data: true },
+        equals: "Hello World",
+      }),
+    ],
+  });
+
+  defineTest("catch", z.catch(z.string(), ""), {
+    type: "string",
+    tests: [
+      testCase({
+        value: "Hello World",
+        parse: { data: "Hello World" },
+      }),
+    ],
+  });
+
+  defineTest("nan", z.nan(), {
+    type: "number",
+    tests: [testCase({ value: NaN, parse: { data: NaN } })],
+  });
+
+  defineTest(
+    "pipe",
+    z.pipe(
+      z.string(),
+      z.transform((value) => value.toUpperCase()),
+    ),
+    {
+      type: "string",
+      tests: [
+        testCase({ value: "Hello World", parse: { data: "HELLO WORLD" } }),
+      ],
+    },
+  );
+
+  // // TODO: Support codecs
   // defineTest(
-  //   `string [format:url(protocol:${/https?/})`,
-  //   [z.string().url({ protocol: /https?/ }), z.url({ protocol: /https?/ })],
-  //   {
-  //     type: "string",
-  //     asserts: [checkMap.string_format.url("test", { protocol: /https?/ })],
-  //     tests: {
-  //       passing: [{ value: "https://example.com" }],
-  //       failing: [
-  //         {
-  //           value: "ftp://example.com",
-  //           error: /must match protocol \/https\?\//i,
-  //         },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest(
-  //   `string [format:url(hostname:${/example\.com/})`,
-  //   [
-  //     z.string().url({ hostname: /example\.com/ }),
-  //     z.url({ hostname: /example\.com/ }),
-  //   ],
-  //   {
-  //     type: "string",
-  //     asserts: [
-  //       checkMap.string_format.url("test", { hostname: /example\.com/ }),
-  //     ],
-  //     tests: {
-  //       passing: [
-  //         { value: "https://example.com" },
-  //         { value: "http://example.com" },
-  //         { value: "http://example.com:8080" },
-  //         { value: "http://www.example.com" },
-  //       ],
-  //       failing: [
-  //         {
-  //           value: "http://example.es",
-  //           error: /must match hostname \/example\\\.com\//i,
-  //         },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest(
-  //   `string [format:url(normalize, protocol:${/https?/})`,
-  //   [
-  //     z.string().url({ normalize: true, protocol: /https?/ }),
-  //     z.url({ normalize: true, protocol: /https?/ }),
-  //   ],
-  //   {
-  //     type: "string",
-  //     transforms: [
-  //       checkMap.string_format.url("test", {
-  //         normalize: true,
-  //         protocol: /https?/,
-  //       }),
-  //     ],
-  //     tests: {
-  //       passing: [
-  //         { value: "https://example.com", equals: "https://example.com/" },
-  //         { value: "http://example.com", equals: "http://example.com/" },
-  //         { value: "https://example.com:443", equals: "https://example.com/" },
-  //         { value: "http://example.com:80", equals: "http://example.com/" },
-  //         {
-  //           value: "https://example.com:8443",
-  //           equals: "https://example.com:8443/",
-  //         },
-  //         {
-  //           value: "http://example.com:8080",
-  //           equals: "http://example.com:8080/",
-  //         },
-  //         {
-  //           value: "https:example.com:8443",
-  //           equals: "https://example.com:8443/",
-  //         },
-  //       ],
-  //       failing: [
-  //         {
-  //           value: "ftp://example.com",
-  //           error: /must match protocol \/https\?\//i,
-  //         },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest(
-  //   `string [format:url(normalize, hostname:${/example\.com/})`,
-  //   [
-  //     z.string().url({ normalize: true, hostname: /example\.com/ }),
-  //     z.url({ normalize: true, hostname: /example\.com/ }),
-  //   ],
-  //   {
-  //     type: "string",
-  //     transforms: [
-  //       checkMap.string_format.url("test", {
-  //         normalize: true,
-  //         hostname: /example\.com/,
-  //       }),
-  //     ],
-  //     tests: {
-  //       passing: [
-  //         { value: "https://example.com", equals: "https://example.com/" },
-  //         { value: "http://example.com", equals: "http://example.com/" },
-  //         { value: "https://example.com:443", equals: "https://example.com/" },
-  //         { value: "http://example.com:80", equals: "http://example.com/" },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest(
-  //   "option<string>",
-  //   [
-  //     z.string().optional(),
-  //     z.string().optional().nonoptional().optional(),
-  //     z.optional(z.string()),
-  //   ],
-  //   {
-  //     type: "option<string>",
-  //     tests: {
-  //       passing: [
-  //         { value: "Hello World" },
-  //         { value: "" },
-  //         { value: undefined },
-  //       ],
-  //       failing: [
-  //         { value: null, error: /expected `none | string` but found `NULL`/i },
-  //         { value: 123, error: /expected `none | string` but found `123`/i },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest(`array<string>`, [z.array(z.string()), z.string().array()], {
-  //   type: "array<string>",
-  //   tests: {
-  //     passing: [{ value: ["Hello World"] }, { value: ["Hello", "World"] }],
-  //     failing: [{ value: [123], error: /expected `string` but found `123`/i }],
-  //   },
-  // });
-
-  // defineTest(
-  //   "array<option<string>>",
-  //   [z.array(z.string().optional()), z.optional(z.string()).array()],
-  //   {
-  //     type: "array<option<string>>",
-  //     tests: {
-  //       passing: [
-  //         { value: ["Hello World", undefined] },
-  //         { value: ["Hello", "World", undefined] },
-  //       ],
-  //       failing: [
-  //         { value: [123], error: /expected `none | string` but found `123`/i },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest(
-  //   "option<bool>",
-  //   [
-  //     z.boolean().optional(),
-  //     z.boolean().optional().nonoptional().optional(),
-  //     z.optional(z.boolean()),
-  //   ],
-  //   {
-  //     type: "option<bool>",
-  //     tests: {
-  //       passing: [{ value: true }, { value: false }, { value: undefined }],
-  //       failing: [
-  //         { value: null, error: /expected `none | bool` but found `NULL`/i },
-  //         { value: 123, error: /expected `none | bool` but found `123`/i },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest("array<bool>", [z.array(z.boolean()), z.boolean().array()], {
-  //   type: "array<bool>",
-  //   tests: {
-  //     passing: [
-  //       { value: [] },
-  //       { value: [true, false] },
-  //       { value: [false, true] },
-  //       { value: [true, false, true] },
-  //     ],
-  //     failing: [{ value: [123], error: /expected `bool` but found `123`/i }],
-  //   },
-  // });
-
-  // defineTest("number", z.number(), {
-  //   type: "number",
-  //   tests: {
-  //     passing: [
-  //       { value: 123 },
-  //       { value: 123.456 },
-  //       { value: 123.456789 },
-  //       { value: 12345n, equals: 12345 },
-  //       { value: 12345678901234567n },
-  //       testCase({
-  //         value: new Decimal(12345678901234567n),
-  //         check(value) {
-  //           expect(value.toJSON()).toEqual(
-  //             new Decimal(12345678901234567n).toJSON(),
-  //           );
-  //         },
-  //       }),
-  //     ],
-  //     failing: [
-  //       { value: "123", error: /expected `number` but found `'123'`/i },
-  //       { value: null, error: /expected `number` but found `NULL`/i },
-  //       { value: undefined, error: /expected `number` but found `NONE`/i },
-  //     ],
-  //   },
-  // });
-
-  // defineTest(
-  //   "option<number>",
-  //   [
-  //     z.number().optional(),
-  //     z.number().optional().nonoptional().optional(),
-  //     z.optional(z.number()),
-  //   ],
-  //   {
-  //     type: "option<number>",
-  //     tests: {
-  //       passing: [{ value: 123 }, { value: undefined }],
-  //       failing: [
-  //         {
-  //           value: "123",
-  //           error: /expected `none | number` but found `'123'`/i,
-  //         },
-  //         {
-  //           value: null,
-  //           error: /expected `none | number` but found `NULL`/i,
-  //         },
-  //       ],
-  //     },
-  //   },
-  // );
-
-  // defineTest("array<number>", [z.array(z.number()), z.number().array()], {
-  //   type: "array<number>",
-  //   tests: {
-  //     passing: [
-  //       testCase({
-  //         value: [
-  //           123,
-  //           123.456,
-  //           123.456789,
-  //           12345n,
-  //           12345678901234567n,
-  //           new Decimal(12345678901234567n),
-  //         ],
-  //         check(value) {
-  //           expect(value.slice(0, -1)).toEqual([
-  //             123,
-  //             123.456,
-  //             123.456789,
-  //             12345,
-  //             12345678901234567n,
-  //           ]);
-  //           expect((value.at(-1) as Decimal).toJSON()).toEqual(
-  //             new Decimal(12345678901234567n).toJSON(),
-  //           );
-  //         },
-  //       }),
-  //     ],
-  //   },
-  // });
-
-  // defineTest("object", z.object({}), {
-  //   type: "object",
-  //   debug: true,
-  //   tests: {
-  //     passing: [{ value: {} }, { value: { name: "Manuel" } }],
-  //     failing: [
-  //       {
-  //         value: "Hello",
-  //         error: /expected `object` but found `'Hello'`/i,
-  //       },
-  //       {
-  //         value: undefined,
-  //         error: /expected `object` but found `NONE`/i,
-  //       },
-  //       {
-  //         value: null,
-  //         error: /expected `object` but found `NULL`/i,
-  //       },
-  //     ],
-  //   },
-  // });
-
-  // defineTest("object { name: string }", z.object({ name: z.string() }), {
-  //   type: "object",
-  //   children: [
-  //     {
-  //       name: "name",
-  //       type: "string",
-  //     },
-  //   ],
-  //   debug: true,
-  //   tests: {
-  //     passing: [{ value: { name: "Manuel" } }],
-  //   },
-  // });
-
-  // defineTest(
-  //   "object { name: string, age: number }",
-  //   z.object({ name: z.string(), age: z.number() }),
-  //   {
-  //     type: "object",
-  //     children: [
-  //       {
-  //         name: "name",
-  //         type: "string",
-  //       },
-  //       {
-  //         name: "age",
-  //         type: "number",
-  //       },
-  //     ],
-  //   },
-  // );
-
-  // defineTest(
-  //   "nested object",
-  //   z.object({
-  //     name: z.object({
-  //       given: z.string().min(1).max(50),
-  //       middle: z.string().max(50).optional(),
-  //       family: z.string().min(1).max(50),
-  //       prefix: z.string().max(10).optional(),
-  //       suffix: z.string().max(10).optional(),
-  //     }),
-  //     address: z.object({
-  //       street: z.string().min(1),
-  //       unit: z.string().optional(),
-  //       city: z.string().min(1),
-  //       state: z.string().length(2),
-  //       postalCode: z.string().min(5).max(10),
-  //       country: z.string().length(2),
-  //       coordinates: z
-  //         .object({
-  //           latitude: z.number().min(-90).max(90),
-  //           longitude: z.number().min(-180).max(180),
-  //         })
-  //         .optional(),
-  //     }),
+  //   "codec",
+  //   z.codec(z.string(), z.number(), {
+  //     encode: (value: number) => String(value),
+  //     decode: (value: string) => Number(value),
   //   }),
   //   {
-  //     type: "object",
-  //     children: [
-  //       {
-  //         name: "name",
-  //         type: "object",
-  //         children: [
-  //           {
-  //             name: "given",
-  //             type: "string",
-  //             asserts: [
-  //               checkMap.min_length("test.name.given", 1, "string"),
-  //               checkMap.max_length("test.name.given", 50, "string"),
-  //             ],
-  //           },
-  //           {
-  //             name: "middle",
-  //             type: "option<string>",
-  //             asserts: [checkMap.max_length("test.name.middle", 50, "string")],
-  //           },
-  //           {
-  //             name: "family",
-  //             type: "string",
-  //             asserts: [
-  //               checkMap.min_length("test.name.family", 1, "string"),
-  //               checkMap.max_length("test.name.family", 50, "string"),
-  //             ],
-  //           },
-  //           {
-  //             name: "prefix",
-  //             type: "option<string>",
-  //             asserts: [checkMap.max_length("test.name.prefix", 10, "string")],
-  //           },
-  //           {
-  //             name: "suffix",
-  //             type: "option<string>",
-  //             asserts: [checkMap.max_length("test.name.suffix", 10, "string")],
-  //           },
-  //         ],
-  //       },
-  //       {
-  //         name: "address",
-  //         type: "object",
-  //         children: [
-  //           {
-  //             name: "street",
-  //             type: "string",
-  //             asserts: [
-  //               checkMap.min_length("test.address.street", 1, "string"),
-  //             ],
-  //           },
-  //           {
-  //             name: "unit",
-  //             type: "option<string>",
-  //           },
-  //           {
-  //             name: "city",
-  //             type: "string",
-  //             asserts: [checkMap.min_length("test.address.city", 1, "string")],
-  //           },
-  //           {
-  //             name: "state",
-  //             type: "string",
-  //             asserts: [checkMap.length_equals("test.address.state", 2)],
-  //           },
-  //           {
-  //             name: "postalCode",
-  //             type: "string",
-  //             asserts: [
-  //               checkMap.min_length("test.address.postalCode", 5, "string"),
-  //               checkMap.max_length("test.address.postalCode", 10, "string"),
-  //             ],
-  //           },
-  //           {
-  //             name: "country",
-  //             type: "string",
-  //             asserts: [checkMap.length_equals("test.address.country", 2)],
-  //           },
-  //           {
-  //             name: "coordinates",
-  //             type: "option<object>",
-  //             children: [
-  //               {
-  //                 name: "latitude",
-  //                 type: "number",
-  //                 asserts: [
-  //                   checkMap.greater_than(
-  //                     "test.address.coordinates.latitude",
-  //                     -90,
-  //                     true,
-  //                   ),
-  //                   checkMap.less_than(
-  //                     "test.address.coordinates.latitude",
-  //                     90,
-  //                     true,
-  //                   ),
-  //                 ],
-  //               },
-  //               {
-  //                 name: "longitude",
-  //                 type: "number",
-  //                 asserts: [
-  //                   checkMap.greater_than(
-  //                     "test.address.coordinates.longitude",
-  //                     -180,
-  //                     true,
-  //                   ),
-  //                   checkMap.less_than(
-  //                     "test.address.coordinates.longitude",
-  //                     180,
-  //                     true,
-  //                   ),
-  //                 ],
-  //               },
-  //             ],
-  //           },
-  //         ],
-  //       },
+  //     type: "string | number",
+  //     tests: [
+  //       testCase({ value: "123", parse: { data: 123 }, equals: 123 }),
+  //       // testCase({ value: "123", parse: { data: 123 }, equals: 123 }),
   //     ],
   //   },
   // );
 
-  // defineTest("array<object>", [z.array(z.object({})), z.object({}).array()], {
-  //   type: "array<object>",
-  //   debug: true,
-  //   tests: {
-  //     passing: [
-  //       testCase({
-  //         value: [],
-  //       }),
-  //       testCase({
-  //         value: [
-  //           {
-  //             name: "Manuel",
-  //           },
-  //           {
-  //             name: "David",
-  //           },
-  //         ],
-  //       }),
-  //     ],
-  //   },
-  // });
+  defineTest("readonly", z.readonly(z.string()), {
+    type: "string",
+    tests: [testCase({ value: "Hello World", parse: { data: "Hello World" } })],
+  });
 
-  // // defineTest("array", [z.array(z.any()), z.any().array()], {
-  // //   type: "array<any>",
-  // // });
+  // TODO: DB Validation?
+  defineTest(
+    "template_literal",
+    z.templateLiteral([z.literal("user."), z.enum(["age", "name"])]),
+    {
+      type: "string",
+      tests: [
+        testCase({ value: "user.age", parse: { data: "user.age" } }),
+        testCase({ value: "user.name", parse: { data: "user.name" } }),
+        testCase({
+          value: "user.unknown",
+          parse: {
+            error: issues([
+              issue.invalid_format("template_literal", {
+                pattern: /^(user\.)(age|name)$/,
+              }),
+            ]),
+          },
+          // error: /expected `string` but found `'user.unknown'`/i,
+        }),
+      ],
+    },
+  );
 
-  // // test.each([
-  // //   // <expected>, <schema>
-  // //   // ----------------------
-  // //   [
-  // //     "any",
-  // //     z.any(),
-  // //     dedent`
-  // //       DEFINE TYPE test TYPE any;
-  // //     `,
-  // //   ],
-  // //   // ["bool", z.boolean()],
-  // //   // ["object", z.object()],
-  // //   // ["number", z.number()],
-  // //   // // ['["asd", "qwe"]', z.tuple([z.literal('asd'), z.literal('qwe')])]
-  // //   // [
-  // //   //   "option<string>",
-  // //   //   [z.string().optional(), z.string().optional().nonoptional().optional()],
-  // //   // ],
-  // //   // ["string | NULL", z.string().nullable()],
-  // //   // ["string", z.base64()],
-  // //   // ["string", z.base64url()],
-  // //   // ["array<any>", z.any().array()],
-  // //   // // ['range', sz.range()],
-  // //   // // ["record", sz.record()],
-  // //   // // ["record<user>", z.record(['user'])],
-  // //   // // ["record<user | administrator>", sz.record(['user', 'administrator'])],
-  // //   // // ["set", z.set(z.any())],
-  // //   // // ["set<string>", z.set(z.string())],
-  // //   // // ["set<string, 10>", z.set(z.string()).max(10)],
-  // //   // ["string", [z.string(), z.string().optional().nonoptional()]],
-  // //   // ["NONE", z.undefined()],
-  // //   // ["NONE | NULL", z.undefined().nullable()],
-  // // ])("%s", async (typeName, _schemas) => {
-  // //   const schemas = Array.isArray(_schemas) ? _schemas : [_schemas];
-  // //   for (let i = 0; i < schemas.length; i++) {
-  // //     // biome-ignore lint/style/noNonNullAssertion: bounds accounted for
-  // //     const schema = schemas[i]!;
-  // //     const type = zodTypeToSurrealType(schema, [], {
-  // //       transforms: [],
-  // //       asserts: [],
-  // //       children: [],
-  // //       rootSchema: schema,
-  // //       table: new Table("test"),
-  // //       name: `test_${i}`,
-  // //     });
-  // //     expect(type).toBe(typeName);
-  // //     await surreal.query(
-  // //       `DEFINE FIELD test_${i} ON TABLE client TYPE ${type};`,
-  // //     );
-  // //   }
-  // // });
+  const object = z.object({
+    name: z.string(),
+    age: z.number(),
+    children: z.array(z.string().or(z.lazy(() => object))),
+  });
+  defineTest("lazy", object, {
+    type: "object",
+    children: [
+      { name: "name", type: "string" },
+      { name: "age", type: "number" },
+      { name: "children", type: "array" },
+    ],
+    tests: [
+      testCase({ value: { name: "John Doe", age: 17, children: [] } }),
+      testCase({
+        value: { name: "John Doe", age: 17, children: ["user:1", "user:2"] },
+      }),
+      testCase({
+        value: {
+          name: "John Doe",
+          age: 17,
+          children: [{ name: "Jane Doe", age: 16 }],
+        },
+      }),
+      testCase({
+        value: {
+          name: "John Doe",
+          age: 17,
+          children: [{ age: 16 }],
+        },
+        parse: {
+          error: issues([
+            issue.invalid_union(
+              [issue.invalid_type("string")],
+              [
+                issue.invalid_type("string", { path: ["name"] }),
+                issue.invalid_type("array", { path: ["children"] }),
+              ],
+            ),
+          ]),
+        },
+      }),
+    ],
+  });
 
-  // describe("default values", () => {
-  //   defineTest(
-  //     "string [default: 'Hello World']",
-  //     z.string().default("Hello World"),
-  //     {
-  //       type: "string",
-  //       default: { value: "Hello World" },
-  //       tests: {
-  //         passing: [{ value: undefined, equals: "Hello World" }],
-  //       },
-  //     },
-  //   );
-  // });
+  // We will not support promises for now, this can be uncommented after
+  // support is added
+  defineTest("promise<string>", z.promise(z.string()), {
+    error: /Promise type cannot be used as a field type/i,
+    //   type: "string",
+    //   async: true,
+    //   tests: [
+    //     testCase({
+    //       value: Promise.resolve("Hello World"),
+    //       parse: { data: "Hello World" },
+    //     }),
+    //   ],
+  });
+
+  defineTest("function", z.function(), {
+    error: /Function type cannot be used as a field type/i,
+  });
+
+  defineTest("custom", z.custom(), {
+    error: /Custom type cannot be used as a field type/i,
+  });
 });
-
-// describe("backwards compatibility", () => {
-//   test("email regex didn't change", () => {
-//     const original =
-//       /^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/;
-//     const newRegex = z.email()._zod.def.pattern as RegExp;
-//     expect(newRegex).toEqual(original);
-//   });
-// });

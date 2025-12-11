@@ -2,13 +2,11 @@ import {
   BoundQuery,
   escapeIdent,
   escapeIdPart,
-  RecordId,
   surql,
   Table,
+  toSurqlString as baseToSurqlString,
 } from "surrealdb";
-import * as z4 from "zod/v4/core";
-import z from "zod";
-import dedent from "dedent";
+import * as core from "zod/v4/core";
 import type {
   SurrealZodNonOptional,
   SurrealZodNullable,
@@ -19,11 +17,13 @@ import type {
   SurrealZodTableNormal,
   SurrealZodTableRelation,
   SurrealZodType,
-  SurrealZodTypes,
 } from "./zod/schema";
 
-export type ZodTypeName = z4.$ZodType["_zod"]["def"]["type"];
+export type ZodTypeName = core.$ZodType["_zod"]["def"]["type"];
 export type SurrealZodTypeName = SurrealZodType["_zod"]["def"]["type"];
+
+const OPEN_ISSUE_FOR_SUPPORT =
+  " If you need this, please open an issue on the repository so we can look into your use case and possible implementation. https://github.com/msanchezdev/surreal-zod/issues";
 
 /////////////////////////////////////
 /////////////////////////////////////
@@ -205,6 +205,13 @@ export function defineTable(
           {
             exists: options.exists,
             schemafull: surreal.schemafull,
+            // @ts-expect-error - @internal
+            // We need to add the table schema to the fullParents set to avoid
+            // infinite recursion. Child fields keep a separate context from
+            // the table or other fields.
+            // The resting point for fullParents is in the inferSurrealType function,
+            // on the switch case for the "lazy" type.
+            fullParents: new Set([schema]),
           },
         ),
       );
@@ -226,7 +233,7 @@ export function isRelationTable(
   return table._zod.def.surreal.tableType === "relation";
 }
 
-export interface ZodToSurqlOptions<S extends z4.$ZodObject> {
+export interface ZodToSurqlOptions<S extends core.$ZodObject> {
   table: string | Table;
   schemafull?: boolean;
   exists?: "ignore" | "error" | "overwrite";
@@ -238,22 +245,16 @@ export interface ZodToSurqlOptions<S extends z4.$ZodObject> {
 export type DefineFieldOptions = {
   exists?: "ignore" | "error" | "overwrite";
   schemafull?: boolean;
+  // @internal
+  // fullParents?: Set<core.$ZodType>;
 };
 
-function defineField(
+export function defineField(
   name: string,
   table: string,
-  schema: SurrealZodType,
+  schema: core.$ZodType,
   options?: DefineFieldOptions,
 ) {
-  // const context: ZodSurrealTypeContext = {
-  //   name,
-  //   table,
-  //   rootSchema: schema,
-  //   children: [],
-  //   asserts: [],
-  //   transforms: [],
-  // };
   const query = surql`DEFINE FIELD`;
 
   if (options?.exists === "ignore") {
@@ -267,6 +268,9 @@ function defineField(
   const context: ZodSurrealTypeContext = {
     type: new Set(),
     depth: 0,
+    parents: new Set(),
+    // @ts-expect-error - @internal
+    fullParents: options?.fullParents ?? new Set(),
     children: [],
     flexible: false,
   };
@@ -329,14 +333,17 @@ function defineField(
   query.append(`;\n`);
 
   if (context.children.length > 0) {
+    context.fullParents.add(schema);
     for (const { name: childName, type: childType } of context.children) {
       query.append(
         defineField(
-          `${escapeIdent(name)}.${escapeIdent(childName)}`,
+          `${escapeIdent(name)}.${childName === "*" ? childName : escapeIdent(childName)}`,
           table,
           childType as SurrealZodType,
           {
             exists: options?.exists,
+            // @ts-expect-error - @internal
+            fullParents: context.fullParents,
           },
         ),
       );
@@ -355,62 +362,92 @@ type ZodSurrealTypeContext = {
   // transforms: string[];
   // default?: { value: any; always: boolean };
   type: Set<string>;
+  parents: Set<core.$ZodType>;
+  fullParents: Set<core.$ZodType>;
   depth: number;
   children: ZodSurrealChildType[];
   flexible: boolean;
 };
-type ZodSurrealChildType = { name: string; type: z4.$ZodType };
+type ZodSurrealChildType = { name: string; type: core.$ZodType };
+
+function createContext(
+  override?: Partial<ZodSurrealTypeContext>,
+): ZodSurrealTypeContext {
+  return {
+    type: new Set<string>(),
+    depth: 0,
+    parents: new Set<core.$ZodType>(),
+    fullParents: new Set<core.$ZodType>(),
+    children: [],
+    flexible: false,
+    ...override,
+  };
+}
 
 export function inferSurrealType(
-  type: SurrealZodType,
-  context: ZodSurrealTypeContext,
+  type: core.$ZodType,
+  context?: ZodSurrealTypeContext,
 ): string {
-  const schema = type as SurrealZodTypes;
+  context ??= createContext();
+
+  function enter(
+    type: core.$ZodType,
+    ctx?: Omit<Partial<ZodSurrealTypeContext>, "parents"> | true,
+  ) {
+    context ??= createContext();
+    if (context.parents.has(type)) {
+      throw new Error("Recursive type detected");
+    }
+
+    const newContext = ctx
+      ? {
+          children: [],
+          flexible: false,
+          type: new Set<string>(),
+          depth: context.depth + 1,
+          ...(typeof ctx === "object" ? ctx : {}),
+          parents: context.parents,
+          fullParents: context.fullParents,
+        }
+      : context;
+    context.parents.add(type);
+    context.fullParents.add(type);
+    const inner = inferSurrealType(type, newContext);
+    context.fullParents.delete(type);
+    context.parents.delete(type);
+    return { inner, context: newContext };
+  }
+
+  const schema = type as core.$ZodTypes;
   if (!("_zod" in schema)) {
     throw new Error(
       "Invalid schema provided, make sure you are using zod v4 as zod v3 is currently not supported.",
     );
   }
 
-  // if ("surreal" in schema._zod.def) {
-  //   return schema._zod.def.surreal.type;
-  // } else {
-  //   throw new Error(
-  //     // @ts-expect-error - zod core not supported
-  //     `Invalid surreal schema provided. Received ${schema._zod.def.type}`,
-  //   );
-  // }
-
   const def = schema._zod.def;
-  const childIndent = "  ".repeat(context.depth + 1);
   // const checks = getChecks(schema);
   // parseChecks(context.name, checks, context, def.type);
   // console.log(zodToSexpr(type));
-
-  switch (def.surreal?.type ?? def.type) {
+  switch (/*def.surreal?.type ?? */ def.type) {
     case "any":
     case "unknown": {
       context.type.add("any");
       break;
     }
+    case "void":
     case "never":
     case "undefined": {
       context.type.add("none");
       break;
     }
     case "optional": {
-      inferSurrealType(
-        (type as SurrealZodOptional)._zod.def.innerType,
-        context,
-      );
+      enter((type as SurrealZodOptional)._zod.def.innerType);
       context.type.add("none");
       break;
     }
     case "nonoptional": {
-      inferSurrealType(
-        (type as SurrealZodNonOptional)._zod.def.innerType,
-        context,
-      );
+      enter((type as SurrealZodNonOptional)._zod.def.innerType);
 
       if (context.type.size > 1 && context.type.has("none")) {
         context.type.delete("none");
@@ -422,10 +459,7 @@ export function inferSurrealType(
       break;
     }
     case "nullable": {
-      inferSurrealType(
-        (type as SurrealZodNullable)._zod.def.innerType,
-        context,
-      );
+      enter((type as SurrealZodNullable)._zod.def.innerType);
       context.type.add("null");
       break;
     }
@@ -437,9 +471,47 @@ export function inferSurrealType(
       context.type.add("string");
       break;
     }
-    case "bigint":
+    case "bigint": {
+      if (!isBigIntFormat(def)) {
+        context.type.add("int");
+        break;
+      }
+
+      switch (def.format) {
+        case "int64":
+        case "uint64":
+          context.type.add("int");
+          break;
+        default:
+          throw new Error(`Unsupported bigint format: ${def.format}`);
+      }
+      break;
+    }
     case "number": {
-      context.type.add("number");
+      if (!isNumberFormat(def)) {
+        context.type.add("number");
+        break;
+      }
+
+      switch (def.format) {
+        case "uint32":
+        case "safeint":
+        case "int32":
+          context.type.add("int");
+          break;
+        case "float64":
+        case "float32":
+          context.type.add("float");
+          break;
+        default:
+          throw new Error(
+            `Unsupported number format: ${def.format}. ${OPEN_ISSUE_FOR_SUPPORT}`,
+          );
+      }
+      break;
+    }
+    case "date": {
+      context.type.add("datetime");
       break;
     }
     case "object": {
@@ -471,9 +543,190 @@ export function inferSurrealType(
       context.type.add("object");
       if (isLoose) context.flexible = true;
       for (const [key, value] of Object.entries(shape)) {
-        context.children.push({ name: key, type: value });
+        context.children.push({ name: key, type: value as core.$ZodType });
       }
       break;
+    }
+    case "array": {
+      const { inner: element } = enter(def.element, true);
+      if (element === "any") {
+        context.type.add("array");
+        break;
+      }
+
+      context.type.add(`array<${element}>`);
+      break;
+    }
+    case "set": {
+      const { inner: element } = enter(def.valueType, true);
+      if (element === "any") {
+        context.type.add("array");
+        break;
+      }
+
+      context.type.add(`array<${element}>`);
+      break;
+    }
+    case "enum": {
+      const values = def.entries;
+      for (const key in values) {
+        const value = values[key];
+        context.type.add(toSurqlString(value));
+      }
+      break;
+    }
+    case "union": {
+      for (const option of def.options) {
+        // context.type.add(inferSurrealType(option, context));
+        enter(option);
+      }
+      break;
+    }
+    case "intersection": {
+      // TODO: Find a way to handle intersections
+      // Maybe a new function where we build a new object schema (or primitive one)
+      // And keep track of all the types that are used in the intersection
+      //
+      // const left = def.left;
+      // const right = def.right;
+      // inferSurrealType(left, context);
+      // inferSurrealType(right, context);
+      // inferSurrealType(z.never(), context);
+      // context.type.add("any");
+      context.type.add("any");
+      break;
+    }
+    case "tuple": {
+      if (def.rest) {
+        context.type.add("array");
+        break;
+      }
+
+      const types = new Set<string>();
+      for (const item of def.items) {
+        types.add(enter(item, true).inner);
+      }
+      context.type.add(`[${Array.from(types).join(", ")}]`);
+      break;
+    }
+    case "record": {
+      context.type.add("object");
+      // Currently there is no way to restrict the key type of an object, so we just use *
+      // context.children.push({ name: "*", type: def.keyType });
+      // All commented out code is because of this. Check is only done in JS side.
+      enter(def.keyType, true);
+      /* const isPartial =
+        def.keyType._zod.values === undefined &&
+        !keyContext.type.has("string") &&
+        !keyContext.type.has("number") &&
+        !keyContext.type.has("int") &&
+        !keyContext.type.has("float") &&
+        !keyContext.type.has("decimal"); */
+      context.children.push({
+        name: "*",
+        type: /* isPartial ? z.optional(def.valueType) : */ def.valueType,
+      });
+      break;
+    }
+    case "map": {
+      context.type.add("object");
+      // Currently there is no way to restrict the key type of an object, so we just use *
+      // Surreal doesnt have a map type, so we use object instead. We cant really support non PropertyKey values
+      // unless we serialize the keys to strings.
+      const { context: keyContext } = enter(def.keyType, true);
+      for (const key of keyContext.type) {
+        if (!["string", "number", "float", "int", "decimal"].includes(key)) {
+          throw new Error(`Unsupported key type: ${key}`);
+        }
+      }
+      context.children.push({
+        name: "*",
+        type: def.valueType,
+      });
+      break;
+    }
+    case "literal": {
+      for (const value of def.values) {
+        context.type.add(toSurqlString(value));
+      }
+      break;
+    }
+    case "file": {
+      throw new Error(
+        `File type cannot be used as a field type.${OPEN_ISSUE_FOR_SUPPORT}`,
+      );
+    }
+    case "transform": {
+      break;
+    }
+    case "default": {
+      enter(def.innerType);
+      break;
+    }
+    case "prefault": {
+      enter(def.innerType);
+      break;
+    }
+    case "success": {
+      context.type.add("string");
+      break;
+    }
+    case "catch": {
+      enter(def.innerType);
+      break;
+    }
+    case "nan": {
+      context.type.add("number");
+      break;
+    }
+    case "pipe": {
+      enter(def.in);
+      enter(def.out);
+      break;
+    }
+    case "readonly": {
+      enter(def.innerType);
+      break;
+    }
+    case "template_literal": {
+      context.type.add("string");
+      break;
+    }
+    case "lazy": {
+      const innerType = def.getter();
+      // All that cascading to get here, we dont want to keep complex types if
+      // recursive.
+      if (context.fullParents.has(innerType)) {
+        context.type.add("any");
+      } else {
+        enter(innerType);
+      }
+      break;
+    }
+    case "promise": {
+      // We will not support promises for now, this can be uncommented after
+      // support is added
+      // const { inner: innerType } =
+      // enter(def.innerType);
+      // context.type.add(innerType);
+      throw new Error(
+        `Promise type cannot be used as a field type.${OPEN_ISSUE_FOR_SUPPORT}`,
+      );
+    }
+    case "function": {
+      throw new Error(
+        `Function type cannot be used as a field type.${OPEN_ISSUE_FOR_SUPPORT}`,
+      );
+    }
+    case "custom": {
+      throw new Error(
+        `Custom type cannot be used as a field type.${OPEN_ISSUE_FOR_SUPPORT}`,
+      );
+    }
+    case "symbol": {
+      throw new Error(
+        `Symbol type cannot be used as a field type.${OPEN_ISSUE_FOR_SUPPORT}`,
+      );
     }
     case "record_id": {
       const table = (def as SurrealZodRecordId["_zod"]["def"]).table;
@@ -485,15 +738,29 @@ export function inferSurrealType(
       break;
     }
     case "table": {
-      throw new Error("Table type cannot be used as a field type");
+      throw new Error(
+        `Table type cannot be used as a field type.${OPEN_ISSUE_FOR_SUPPORT}`,
+      );
     }
   }
 
-  if (context.type.has("any")) {
+  if (context.type.has("any") || context.type.size === 0) {
     return "any";
   }
 
   return Array.from(context.type).join(" | ");
+}
+
+function isBigIntFormat(
+  def: core.$ZodBigIntDef,
+): def is core.$ZodBigIntFormatDef {
+  return def.type === "bigint" && "format" in def;
+}
+
+function isNumberFormat(
+  def: core.$ZodNumberDef,
+): def is core.$ZodNumberFormatDef {
+  return def.type === "number" && "format" in def;
 }
 
 // function getChecks(_schema: z4.$ZodType | SurrealZodType) {
@@ -656,3 +923,7 @@ export function inferSurrealType(
 //       return { assert: `THROW 'Unsupported string format: ${def.format}';` };
 //   }
 // }
+
+function toSurqlString(value: unknown): string {
+  return baseToSurqlString(value).replace(/^s"/g, '"');
+}

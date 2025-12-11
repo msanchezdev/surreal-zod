@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { AsymmetricMatcher, describe, expect, test } from "bun:test";
 import { safeParse } from "zod/v4";
 import sz from "../src";
 import { RecordId } from "surrealdb";
@@ -75,7 +75,7 @@ type SuiteCfg = {
           | {
               __but__?: {
                 pass: false;
-                error: ReturnType<typeof expect.objectContaining>;
+                error: AsymmetricMatcher;
               };
             }
           | {

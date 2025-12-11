@@ -247,19 +247,13 @@ describe("surreal-zod", () => {
     defineTest,
   };
 
-  common.any(ctx);
-  common.unknown(ctx);
-  common.never(ctx);
-  common.undefined(ctx);
+  common.number(ctx);
+
   common.optional(ctx);
   common.nonoptional(ctx);
   common.null(ctx);
   common.nullable(ctx);
   common.nullish(ctx);
-  common.boolean(ctx);
-  common.string(ctx);
-  common.number(ctx);
-  common.bigint(ctx);
   common.object(ctx);
 
   describe("recordId", () => {
@@ -269,7 +263,7 @@ describe("surreal-zod", () => {
         sz.recordId(),
         sz.recordId("user").anytable(),
         sz.recordId(["user", "order"]).anytable(),
-        sz.recordId("user").type(sz.string()).anytable(),
+        sz.recordId("user").type(z.string()).anytable(),
       ],
       {
         type: "record",
@@ -286,7 +280,7 @@ describe("surreal-zod", () => {
         sz.recordId("user"),
         sz.recordId("user").table("user"),
         sz.recordId(["user", "order"]).table("user"),
-        sz.recordId("user").type(sz.string()),
+        sz.recordId("user").type(z.string()),
       ],
       {
         type: "record<user>",
@@ -304,7 +298,7 @@ describe("surreal-zod", () => {
       "multiple tables",
       [
         sz.recordId(["user", "admin"]),
-        sz.recordId(["user", "admin"]).type(sz.string()),
+        sz.recordId(["user", "admin"]).type(z.string()),
       ],
       {
         type: "record<user | admin>",
@@ -316,7 +310,7 @@ describe("surreal-zod", () => {
   describe("table", () => {
     test("toSurql('info')", () => {
       const schema = sz.table("user").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.toSurql("info");
       expect(query.query).toEqual(dedent.withOptions({ alignValues: true })`
@@ -325,7 +319,7 @@ describe("surreal-zod", () => {
     });
     test("toSurql('structure')", () => {
       const schema = sz.table("user").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.toSurql("structure");
       expect(query.query).toEqual(dedent.withOptions({ alignValues: true })`
@@ -334,7 +328,7 @@ describe("surreal-zod", () => {
     });
     test("toSurql('remove')", () => {
       const schema = sz.table("user").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.toSurql("remove");
       expect(query.query).toEqual(dedent.withOptions({ alignValues: true })`
@@ -347,7 +341,7 @@ describe("surreal-zod", () => {
     });
     test("toSurql('define') - default", () => {
       const schema = sz.table("user").comment("Users table").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.toSurql("define");
       expect(query.query.trim()).toMatch(
@@ -356,7 +350,7 @@ describe("surreal-zod", () => {
     });
     test("toSurql('define') - ignore", () => {
       const schema = sz.table("user").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.toSurql("define", { exists: "ignore" });
       expect(query.query.trim()).toEqual(
@@ -367,7 +361,7 @@ describe("surreal-zod", () => {
     });
     test("toSurql('define') - overwrite", () => {
       const schema = sz.table("user").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.toSurql("define", { exists: "overwrite" });
       expect(query.query.trim()).toEqual(
@@ -378,7 +372,7 @@ describe("surreal-zod", () => {
     });
     test("toSurql('define') - with fields", () => {
       const schema = sz.table("user").fields({
-        name: sz.string(),
+        name: z.string(),
       });
       const query = schema.drop().toSurql("define", { fields: true });
       expect(query.query.trim()).toEqual(

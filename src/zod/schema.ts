@@ -4,15 +4,11 @@ import {
   BoundQuery,
   escapeIdent,
   RecordId,
-  surql,
-  Table,
   type RecordIdValue,
 } from "surrealdb";
 import * as core from "zod/v4/core";
 import * as classic from "zod/v4";
 import {
-  defineTable,
-  inferSurrealType,
   tableToSurql,
   type DefineTableOptions,
   type RemoveTableOptions,
@@ -28,20 +24,6 @@ import {
 //////////////////////////////////////////////
 //////////////////////////////////////////////
 
-export interface SurrealZodTypeDef extends core.$ZodTypeDef {
-  surrealType?:
-    | "any"
-    | "unknown"
-    | "never"
-    | "undefined"
-    | "boolean"
-    | "string"
-    | "number"
-    | "object"
-    | "record_id"
-    | "table";
-}
-
 export interface SurrealZodInternals {
   type: string;
 }
@@ -51,10 +33,9 @@ export interface SurrealZodTypeInternals<
   out I = unknown,
   out SurrealInternals extends SurrealZodInternals = SurrealZodInternals,
 > extends core.$ZodTypeInternals<O, I> {
-  def: core.$ZodTypeInternals<O, I>["def"] &
-    SurrealZodTypeDef & {
-      surreal: SurrealInternals;
-    };
+  def: core.$ZodTypeInternals<O, I>["def"] & {
+    surreal: SurrealInternals;
+  };
 }
 
 export interface SurrealZodType<
@@ -65,26 +46,7 @@ export interface SurrealZodType<
     I,
     SurrealZodInternals
   > = SurrealZodTypeInternals<O, I, SurrealZodInternals>,
-> extends core.$ZodType<O, I, Internals> {
-  // base
-  clone(def?: Internals["def"], params?: { parent: boolean }): this;
-
-  // parsing
-  parse(
-    data: unknown,
-    params?: core.ParseContext<core.$ZodIssue>,
-  ): core.output<this>;
-  safeParse(
-    data: unknown,
-    params?: core.ParseContext<core.$ZodIssue>,
-  ): classic.ZodSafeParseResult<core.output<this>>;
-
-  // wrappers
-  optional(): SurrealZodOptional<this>;
-  nonoptional(): SurrealZodNonOptional<this>;
-  nullable(): SurrealZodNullable<this>;
-  nullish(): SurrealZodOptional<SurrealZodNullable<this>>;
-}
+> extends Omit<classic.ZodType<O, I, Internals>, "type"> {}
 
 export interface _SurrealZodType<
   Internals extends SurrealZodTypeInternals = SurrealZodTypeInternals,
@@ -92,434 +54,16 @@ export interface _SurrealZodType<
 
 export const SurrealZodType: core.$constructor<SurrealZodType> =
   core.$constructor("SurrealZodType", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodType.init(inst, def);
+    // @ts-expect-error - we will be overriding the type property
+    classic.ZodType.init(inst, def);
+    // @ts-expect-error - we will be overriding the type property
+    delete inst.type;
+
     // Casting as _surreal.type is built while the schema is initialized
     inst._zod.def.surreal ??= {} as SurrealZodInternals;
 
-    // base methods
-    inst.clone = (def, params) => core.clone(inst, def, params);
-
-    // parsing
-    inst.parse = (data, params) => {
-      return core.parse(inst, data, params);
-    };
-    // inst.safeParse = (data, params) => {
-    //   return core.safeParse(inst, data, params);
-    // };
-
-    // wrappers
-    inst.optional = () => optional(inst);
-    inst.nonoptional = () => nonoptional(inst);
-    inst.nullable = () => nullable(inst);
-    inst.nullish = () => nullish(inst);
-
     return inst;
   });
-
-/////////////////////////////////////////////
-/////////////////////////////////////////////
-//////////                         //////////
-//////////      SurrealZodAny      //////////
-//////////                         //////////
-/////////////////////////////////////////////
-/////////////////////////////////////////////
-
-export interface SurrealZodAnyInternals extends core.$ZodAnyInternals {
-  def: core.$ZodAnyInternals["def"] & {
-    surreal: {
-      type: "any";
-    };
-  };
-}
-
-export interface SurrealZodAny
-  extends _SurrealZodType<SurrealZodAnyInternals> {}
-
-export const SurrealZodAny: core.$constructor<SurrealZodAny> =
-  core.$constructor("SurrealZodAny", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodAny.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "any";
-  });
-
-export function any(): SurrealZodAny {
-  return core._any(SurrealZodAny);
-}
-
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-//////////                             //////////
-//////////      SurrealZodUnknown      //////////
-//////////                             //////////
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-
-export interface SurrealZodUnknownInternals extends core.$ZodUnknownInternals {
-  def: core.$ZodUnknownInternals["def"] & {
-    surreal: {
-      type: "unknown";
-    };
-  };
-}
-
-export interface SurrealZodUnknown
-  extends _SurrealZodType<SurrealZodUnknownInternals> {}
-
-export const SurrealZodUnknown: core.$constructor<SurrealZodUnknown> =
-  core.$constructor("SurrealZodUnknown", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodUnknown.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "unknown";
-  });
-
-export function unknown(): SurrealZodUnknown {
-  return core._unknown(SurrealZodUnknown);
-}
-
-///////////////////////////////////////////////
-///////////////////////////////////////////////
-//////////                           //////////
-//////////      SurrealZodNever      //////////
-//////////                           //////////
-///////////////////////////////////////////////
-///////////////////////////////////////////////
-
-export interface SurrealZodNeverInternals extends core.$ZodNeverInternals {
-  def: core.$ZodNeverInternals["def"] & {
-    surreal: {
-      type: "never";
-    };
-  };
-}
-
-export interface SurrealZodNever
-  extends _SurrealZodType<SurrealZodNeverInternals> {}
-
-export const SurrealZodNever: core.$constructor<SurrealZodNever> =
-  core.$constructor("SurrealZodNever", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodNever.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "never";
-  });
-
-export function never(params?: string | core.$ZodNeverParams): SurrealZodNever {
-  return core._never(SurrealZodNever, params);
-}
-
-///////////////////////////////////////////////////
-///////////////////////////////////////////////////
-//////////                               //////////
-//////////      SurrealZodUndefined      //////////
-//////////                               //////////
-///////////////////////////////////////////////////
-///////////////////////////////////////////////////
-
-export interface SurrealZodUndefinedInternals
-  extends core.$ZodUndefinedInternals {
-  def: core.$ZodUndefinedInternals["def"] & {
-    surreal: {
-      type: "undefined";
-    };
-  };
-}
-
-export interface SurrealZodUndefined
-  extends _SurrealZodType<SurrealZodUndefinedInternals> {}
-
-export const SurrealZodUndefined: core.$constructor<SurrealZodUndefined> =
-  core.$constructor("SurrealZodUndefined", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodUndefined.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "undefined";
-  });
-
-function _undefined(
-  params?: string | core.$ZodUndefinedParams,
-): SurrealZodUndefined {
-  return core._undefined(SurrealZodUndefined, params);
-}
-export { _undefined as undefined };
-
-//////////////////////////////////////////////
-//////////////////////////////////////////////
-//////////                          //////////
-//////////      SurrealZodNull      //////////
-//////////                          //////////
-//////////////////////////////////////////////
-//////////////////////////////////////////////
-
-export interface SurrealZodNullInternals extends core.$ZodNullInternals {
-  def: core.$ZodNullInternals["def"] & {
-    surreal: {
-      type: "null";
-    };
-  };
-}
-
-export interface SurrealZodNull
-  extends _SurrealZodType<SurrealZodNullInternals> {}
-
-export const SurrealZodNull: core.$constructor<SurrealZodNull> =
-  core.$constructor("SurrealZodNull", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodNull.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "null";
-  });
-
-function _null(params?: string | core.$ZodNullParams): SurrealZodNull {
-  return core._null(SurrealZodNull, params);
-}
-export { _null as null };
-
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-//////////                             //////////
-//////////      SurrealZodBoolean      //////////
-//////////                             //////////
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-
-export interface SurrealZodBooleanInternals extends core.$ZodBooleanInternals {
-  def: core.$ZodBooleanInternals["def"] & {
-    surreal: {
-      type: "boolean";
-    };
-  };
-}
-export interface SurrealZodBoolean
-  extends _SurrealZodType<SurrealZodBooleanInternals> {}
-
-export const SurrealZodBoolean: core.$constructor<SurrealZodBoolean> =
-  core.$constructor("SurrealZodBoolean", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodBoolean.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "boolean";
-  });
-
-export function boolean(
-  params?: string | core.$ZodBooleanParams,
-): SurrealZodBoolean {
-  return core._boolean(SurrealZodBoolean, params);
-}
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-//////////                            //////////
-//////////      SurrealZodString      //////////
-//////////                            //////////
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-export interface SurrealZodStringInternals
-  extends core.$ZodStringInternals<string> {
-  def: core.$ZodStringInternals<string>["def"] & {
-    surreal: {
-      type: "string";
-    };
-  };
-}
-
-export interface SurrealZodString
-  extends _SurrealZodType<SurrealZodStringInternals> {}
-
-export const SurrealZodString: core.$constructor<SurrealZodString> =
-  core.$constructor("SurrealZodString", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodString.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "string";
-  });
-
-export function string(
-  params?: string | core.$ZodStringParams,
-): SurrealZodString {
-  return core._string(SurrealZodString, params);
-}
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-//////////                            //////////
-//////////      SurrealZodNumber      //////////
-//////////                            //////////
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-export interface SurrealZodNumberInternals extends core.$ZodNumberInternals {
-  def: core.$ZodNumberInternals["def"] & {
-    surreal: {
-      type: "number";
-    };
-  };
-}
-
-export interface SurrealZodNumber
-  extends _SurrealZodType<SurrealZodNumberInternals> {}
-
-export const SurrealZodNumber: core.$constructor<SurrealZodNumber> =
-  core.$constructor("SurrealZodNumber", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodNumber.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "number";
-  });
-
-export function number(
-  params?: string | core.$ZodNumberParams,
-): SurrealZodNumber {
-  return core._number(SurrealZodNumber, params);
-}
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-//////////                            //////////
-//////////      SurrealZodBigInt      //////////
-//////////                            //////////
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-export interface SurrealZodBigIntInternals extends core.$ZodBigIntInternals {
-  def: core.$ZodBigIntInternals["def"] & {
-    surreal: {
-      type: "bigint";
-    };
-  };
-}
-
-export interface SurrealZodBigInt
-  extends _SurrealZodType<SurrealZodBigIntInternals> {}
-
-export const SurrealZodBigInt: core.$constructor<SurrealZodBigInt> =
-  core.$constructor("SurrealZodBigInt", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodBigInt.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "bigint";
-  });
-
-export function bigint(
-  params?: string | core.$ZodBigIntParams,
-): SurrealZodBigInt {
-  return core._bigint(SurrealZodBigInt, params);
-}
-
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-//////////                            //////////
-//////////      SurrealZodObject      //////////
-//////////                            //////////
-////////////////////////////////////////////////
-////////////////////////////////////////////////
-
-export interface SurrealZodObjectInternals<
-  // @ts-expect-error - unknown assertion error
-  out Shape extends core.$ZodShape = core.$ZodLooseShape,
-  out Config extends core.$ZodObjectConfig = core.$strip,
-> extends core.$ZodObjectInternals<
-    Shape,
-    Config
-  > /*, core.$ZodObject<Shape, Config> */ {
-  def: core.$ZodObjectInternals<Shape, Config>["def"] & {
-    surreal: {
-      type: "object";
-      flexible: boolean;
-    };
-  };
-}
-
-export interface SurrealZodObject<
-  // @ts-expect-error - unknown assertion error
-  out Shape extends core.$ZodShape = core.$ZodLooseShape,
-  out Config extends core.$ZodObjectConfig = core.$strip,
-> extends _SurrealZodType<SurrealZodObjectInternals<Shape, Config>> {
-  loose(): this;
-  /**
-   * @alias loose
-   */
-  flexible(): this;
-  strict(): this;
-
-  extend<U extends core.$ZodLooseShape>(
-    shape: U,
-  ): SurrealZodObject<core.util.Extend<Shape, U>, Config>;
-  safeExtend<U extends core.$ZodLooseShape>(
-    shape: classic.SafeExtendShape<Shape, U> &
-      Partial<Record<keyof Shape, core.SomeType>>,
-  ): SurrealZodObject<core.util.Extend<Shape, U>, Config>;
-}
-
-export const SurrealZodObject: core.$constructor<SurrealZodObject> =
-  core.$constructor("SurrealZodObject", (inst, def) => {
-    // TODO: Inline implementation and use core instead
-    // @ts-expect-error - unknown assertion error
-    core.$ZodObject.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    // surreal internals
-    inst._zod.def.surreal.type = "object";
-    // inst._zod.def.surreal.flexible = false;
-
-    inst.loose = () =>
-      inst.clone({
-        ...def,
-        catchall: unknown(),
-      });
-    inst.flexible = inst.loose;
-
-    inst.strict = () =>
-      inst.clone({
-        ...def,
-        catchall: never(),
-      });
-
-    inst.extend = (incoming: any) => core.util.extend(inst, incoming);
-    inst.safeExtend = (incoming: any) => core.util.safeExtend(inst, incoming);
-  });
-
-export function object<
-  T extends core.$ZodLooseShape = Partial<Record<never, core.SomeType>>,
->(
-  shape?: T,
-  params?: string | core.$ZodObjectParams,
-): SurrealZodObject<core.util.Writeable<T>, core.$strip> {
-  const def: core.$ZodObjectDef = {
-    type: "object",
-    shape: shape ?? {},
-    ...core.util.normalizeParams(params),
-  };
-
-  return new SurrealZodObject({
-    ...def,
-    surreal: {
-      type: "object",
-      flexible: false,
-    },
-  }) as any;
-}
 
 //////////////////////////////////////////////////
 //////////////////////////////////////////////////
@@ -530,25 +74,18 @@ export function object<
 //////////////////////////////////////////////////
 
 export type SurrealZodRecordIdValue =
-  | SurrealZodAny
-  // | core.$ZodAny
-  | SurrealZodUnknown
-  // | core.$ZodUnknown
-  | SurrealZodString
-  // | core.$ZodString
-  | SurrealZodNumber
-  // | core.$ZodNumber
-  | SurrealZodBigInt
-  // | core.$ZodBigInt
-  | SurrealZodObject;
-// | core.$ZodObject
-// | SurrealZodArray
-// | core.$ZodArray;
+  | classic.ZodAny
+  | classic.ZodUnknown
+  | classic.ZodString
+  | classic.ZodNumber
+  | classic.ZodBigInt
+  | classic.ZodObject
+  | classic.ZodArray;
 
 export interface SurrealZodRecordIdDef<
   Table extends string = string,
   Id extends SurrealZodRecordIdValue = SurrealZodRecordIdValue,
-> extends SurrealZodTypeDef {
+> extends core.$ZodTypeDef {
   innerType: Id;
   table?: Table[];
 
@@ -589,7 +126,16 @@ export interface SurrealZodRecordId<
     Id
   >;
 
+  /** @alias id */
   type<NewType extends SurrealZodRecordIdValue>(
+    innerType: NewType,
+  ): SurrealZodRecordId<Table, NewType>;
+  /** @alias value */
+  id<NewType extends SurrealZodRecordIdValue>(
+    innerType: NewType,
+  ): SurrealZodRecordId<Table, NewType>;
+  /** @alias type */
+  value<NewType extends SurrealZodRecordIdValue>(
     innerType: NewType,
   ): SurrealZodRecordId<Table, NewType>;
 }
@@ -645,6 +191,8 @@ export const SurrealZodRecordId: core.$constructor<SurrealZodRecordId> =
         innerType,
       }) as any;
     };
+    inst.id = inst.type;
+    inst.value = inst.type;
 
     inst._zod.parse = (payload, ctx) => {
       if (payload.value instanceof RecordId) {
@@ -709,16 +257,13 @@ export function recordId<const W extends string | string[]>(
     // Zod would not be happy if we have a custom type here, so we use any
     type: "any",
     table: what ? (Array.isArray(what) ? what : [what]) : undefined,
-    innerType: innerType ?? any(),
+    innerType: innerType ?? classic.any(),
 
     surreal: {
       type: "record_id",
     },
   }) as any;
 }
-
-const t = recordId("user", string());
-type t = classic.infer<typeof t>;
 
 export type inferRecordIdTable<T extends SurrealZodRecordId<string, any>> =
   T extends SurrealZodRecordId<infer N> ? N : never;
@@ -787,11 +332,11 @@ export interface SurrealZodTableDef<
   Name extends string = string,
   Fields extends SurrealZodTableFields = {},
   Config extends SurrealZodTableConfig = SurrealZodTableConfig,
-> extends SurrealZodTypeDef {
+> extends core.$ZodTypeDef {
   name: Name;
   fields: (Config["dto"] extends true
     ? Omit<NormalizedFields<Name, Fields>, "id"> & {
-        id: SurrealZodOptional<NormalizedFields<Name, Fields>["id"]>;
+        id: classic.ZodOptional<NormalizedFields<Name, Fields>["id"]>;
       }
     : NormalizedFields<Name, Fields>) &
     Config["catchall"];
@@ -957,12 +502,12 @@ function normalizeTableDef(def: SurrealZodTableDef) {
       fields.id = recordId(def.name).type(def.fields.id);
     }
   } else {
-    fields.id = recordId(def.name).type(any());
+    fields.id = recordId(def.name).type(classic.any());
     fieldNames.push("id");
   }
 
-  if (def.dto && !(fields.id instanceof SurrealZodOptional)) {
-    fields.id = optional(fields.id!);
+  if (def.dto && !(fields.id?._zod.def.type === "optional")) {
+    fields.id = classic.optional(fields.id!);
   }
 
   for (const field of fieldNames) {
@@ -1051,7 +596,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
     inst.schemafull = () => {
       return inst.clone({
         ...inst._zod.def,
-        catchall: never(),
+        catchall: classic.never(),
         surreal: {
           ...inst._zod.def.surreal,
           schemafull: true,
@@ -1061,7 +606,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
     inst.schemaless = () => {
       return inst.clone({
         ...inst._zod.def,
-        catchall: unknown(),
+        catchall: classic.unknown(),
         surreal: {
           ...inst._zod.def.surreal,
           schemafull: false,
@@ -1096,7 +641,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
     };
     inst.entity = () => {
       let id: any = normalized.fields.id;
-      while (id && id instanceof SurrealZodOptional) {
+      while (id?._zod.def.type === "optional") {
         id = id.unwrap();
       }
 
@@ -1166,7 +711,7 @@ export function table<Name extends string = string>(name: Name) {
     name,
     // @ts-expect-error - id set in constructor
     fields: {},
-    catchall: unknown(),
+    catchall: classic.unknown(),
 
     surreal: {
       type: "table",
@@ -1427,183 +972,4 @@ export function relationTable<Name extends string = string>(
   return table(name).relation();
 }
 
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-//////////                              //////////
-//////////      SurrealZodOptional      //////////
-//////////                              //////////
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-
-export interface SurrealZodOptionalDef<
-  T extends SurrealZodType = SurrealZodType,
-> extends core.$ZodOptionalDef<T> {
-  innerType: T;
-
-  surreal: {
-    type: "optional";
-  };
-}
-
-export interface SurrealZodOptionalInternals<
-  T extends SurrealZodType = SurrealZodType,
-> extends core.$ZodOptionalInternals<T> {
-  def: SurrealZodOptionalDef<T>;
-}
-
-export interface SurrealZodOptional<T extends SurrealZodType = SurrealZodType>
-  extends _SurrealZodType<SurrealZodOptionalInternals<T>> {
-  unwrap(): T;
-}
-
-export const SurrealZodOptional: core.$constructor<SurrealZodOptional> =
-  core.$constructor("SurrealZodOptional", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodOptional.init(inst, def);
-    SurrealZodType.init(inst, def);
-
-    inst.unwrap = () => {
-      return inst._zod.def.innerType;
-    };
-  });
-
-export function optional<T extends SurrealZodType = SurrealZodType>(
-  innerType: T,
-): SurrealZodOptional<T> {
-  return new SurrealZodOptional({
-    type: "optional",
-    innerType,
-
-    surreal: {
-      type: "optional",
-    },
-  }) as any;
-}
-
-/////////////////////////////////////////////////////
-/////////////////////////////////////////////////////
-//////////                                 //////////
-//////////      SurrealZodNonOptional      //////////
-//////////                                 //////////
-/////////////////////////////////////////////////////
-/////////////////////////////////////////////////////
-
-export interface SurrealZodNonOptionalDef<
-  T extends SurrealZodType = SurrealZodType,
-> extends core.$ZodNonOptionalDef<T> {
-  innerType: T;
-
-  surreal: {
-    type: "nonoptional";
-  };
-}
-
-export interface SurrealZodNonOptionalInternals<
-  T extends SurrealZodType = SurrealZodType,
-> extends core.$ZodNonOptionalInternals<T> {
-  def: SurrealZodNonOptionalDef<T>;
-}
-
-export interface SurrealZodNonOptional<
-  T extends SurrealZodType = SurrealZodType,
-> extends _SurrealZodType<SurrealZodNonOptionalInternals<T>> {}
-
-export const SurrealZodNonOptional: core.$constructor<SurrealZodNonOptional> =
-  core.$constructor("SurrealZodNonOptional", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodNonOptional.init(inst, def);
-    SurrealZodType.init(inst, def);
-  });
-
-export function nonoptional<T extends SurrealZodType = SurrealZodType>(
-  innerType: T,
-): SurrealZodNonOptional<T> {
-  return new SurrealZodNonOptional({
-    type: "nonoptional",
-    innerType,
-
-    surreal: {
-      type: "nonoptional",
-    },
-  }) as any;
-}
-
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-//////////                              //////////
-//////////      SurrealZodNullable      //////////
-//////////                              //////////
-//////////////////////////////////////////////////
-//////////////////////////////////////////////////
-
-export interface SurrealZodNullableDef<
-  T extends SurrealZodType = SurrealZodType,
-> extends core.$ZodNullableDef<T> {
-  innerType: T;
-
-  surreal: {
-    type: "nullable";
-  };
-}
-
-export interface SurrealZodNullableInternals<
-  T extends SurrealZodType = SurrealZodType,
-> extends core.$ZodNullableInternals<T> {
-  def: SurrealZodNullableDef<T>;
-}
-
-export interface SurrealZodNullable<T extends SurrealZodType = SurrealZodType>
-  extends _SurrealZodType<SurrealZodNullableInternals<T>> {}
-
-export const SurrealZodNullable: core.$constructor<SurrealZodNullable> =
-  core.$constructor("SurrealZodNullable", (inst, def) => {
-    // @ts-expect-error - unknown assertion error
-    core.$ZodNullable.init(inst, def);
-    SurrealZodType.init(inst, def);
-  });
-
-export function nullable<T extends SurrealZodType = SurrealZodType>(
-  innerType: T,
-): SurrealZodNullable<T> {
-  return new SurrealZodNullable({
-    type: "nullable",
-    innerType,
-
-    surreal: {
-      type: "nullable",
-    },
-  }) as any;
-}
-
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-//////////                             //////////
-//////////      SurrealZodNullish      //////////
-//////////                             //////////
-/////////////////////////////////////////////////
-/////////////////////////////////////////////////
-
-export function nullish<T extends SurrealZodType = SurrealZodType>(
-  innerType: T,
-): SurrealZodOptional<SurrealZodNullable<T>> {
-  return optional(nullable(innerType));
-}
-
-export type SurrealZodTypes =
-  | SurrealZodAny
-  | SurrealZodUnknown
-  | SurrealZodNever
-  | SurrealZodUndefined
-  | SurrealZodOptional
-  | SurrealZodNonOptional
-  | SurrealZodNull
-  | SurrealZodNullable
-  | SurrealZodBoolean
-  | SurrealZodString
-  | SurrealZodNumber
-  | SurrealZodBigInt
-  | SurrealZodObject
-
-  // Surreal Specific Types
-  | SurrealZodRecordId
-  | SurrealZodTable;
+export type SurrealZodTypes = SurrealZodRecordId | SurrealZodTable;
