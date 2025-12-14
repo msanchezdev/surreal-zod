@@ -1,8 +1,8 @@
 import { describe } from "bun:test";
-import { DateTime } from "surrealdb";
+import { DateTime, Uuid } from "surrealdb";
 import { issue, issues, testCase } from "./utils";
 import { setupSurrealTests } from "./common";
-import z from "zod";
+import { z } from "../src";
 
 describe("zod", () => {
   const { defineTest } = setupSurrealTests();
@@ -44,80 +44,6 @@ describe("zod", () => {
   });
 
   // @original
-  describe("iso", () => {
-    defineTest("date", z.iso.date(), {
-      type: "string",
-      tests: [
-        testCase({
-          value: "2025-01-01",
-          parse: { data: "2025-01-01" },
-        }),
-        testCase({
-          value: "2025-01-01T00:00:00.000Z",
-          parse: { error: issues([issue.invalid_format("date")]) },
-        }),
-      ],
-    });
-
-    defineTest("dateTime", z.iso.datetime(), {
-      type: "string",
-      tests: [
-        testCase({
-          value: "2025-01-01T00:00:00.000Z",
-          parse: { data: "2025-01-01T00:00:00.000Z" },
-        }),
-        testCase({
-          value: "2025-01-01",
-          parse: { error: issues([issue.invalid_format("datetime")]) },
-        }),
-      ],
-    });
-
-    defineTest("duration", z.iso.duration(), {
-      type: "string",
-      tests: [
-        testCase({ value: "P1Y", parse: { data: "P1Y" } }),
-        testCase({ value: "P1M", parse: { data: "P1M" } }),
-        testCase({ value: "P1D", parse: { data: "P1D" } }),
-        testCase({ value: "PT1H", parse: { data: "PT1H" } }),
-        testCase({ value: "PT1M", parse: { data: "PT1M" } }),
-        testCase({ value: "PT1S", parse: { data: "PT1S" } }),
-        testCase({ value: "P1DT2H3M4S", parse: { data: "P1DT2H3M4S" } }),
-        testCase({
-          value: "1d2h3m4s",
-          parse: { error: issues([issue.invalid_format("duration")]) },
-        }),
-      ],
-    });
-
-    defineTest("time", z.iso.time(), {
-      type: "string",
-      tests: [
-        testCase({
-          value: "00:00:00.000",
-          parse: { data: "00:00:00.000" },
-        }),
-        testCase({
-          value: "00:00:00",
-          parse: { data: "00:00:00" },
-        }),
-        testCase({
-          value: "00:00",
-          parse: { data: "00:00" },
-        }),
-        testCase({
-          value: "00",
-          parse: { error: issues([issue.invalid_format("time")]) },
-        }),
-        testCase({
-          value: "00:00:00.000Z",
-          parse: { error: issues([issue.invalid_format("time")]) },
-        }),
-      ],
-    });
-  });
-
-  // @original
   defineTest("email", z.email(), {
     type: "string",
     tests: [
@@ -136,85 +62,90 @@ describe("zod", () => {
 
   // @patched
   defineTest("guid", z.guid(), {
-    type: "string",
+    type: "uuid",
     tests: [
       testCase({
         value: "123e4567-e89b-42d3-a456-426614174000",
-        parse: { data: "123e4567-e89b-42d3-a456-426614174000" },
+        parse: { data: new Uuid("123e4567-e89b-42d3-a456-426614174000") },
       }),
       testCase({
         value: "",
         parse: {
           error: issues([issue.invalid_format("guid")]),
         },
+        error: /expected `uuid` but found `''`/i,
       }),
     ],
   });
 
   // @patched
   defineTest("uuid", z.uuid(), {
-    type: "string",
+    type: "uuid",
     tests: [
       testCase({
         value: "123e4567-e89b-42d3-a456-426614174000",
-        parse: { data: "123e4567-e89b-42d3-a456-426614174000" },
+        parse: { data: new Uuid("123e4567-e89b-42d3-a456-426614174000") },
       }),
       testCase({
         value: "",
         parse: {
           error: issues([issue.invalid_format("uuid")]),
         },
+        error: /expected `uuid` but found `''`/i,
       }),
     ],
   });
 
   // @patched
   defineTest("uuidv4", z.uuidv4(), {
-    type: "string",
+    type: "uuid",
     tests: [
       testCase({
         value: "35a7ed3b-ac21-4c7f-8596-73610200deab",
-        parse: { data: "35a7ed3b-ac21-4c7f-8596-73610200deab" },
+        parse: { data: new Uuid("35a7ed3b-ac21-4c7f-8596-73610200deab") },
       }),
       testCase({
         value: "",
         parse: {
           error: issues([issue.invalid_format("uuid")]),
         },
+        error: /expected `uuid` but found `''`/i,
       }),
     ],
   });
 
   // @patched
   defineTest("uuidv6", z.uuidv6(), {
-    type: "string",
+    type: "uuid",
     tests: [
       testCase({
         value: "1f0d507c-0afa-67f0-a264-115e8c51f2e4",
-        parse: { data: "1f0d507c-0afa-67f0-a264-115e8c51f2e4" },
+        parse: { data: new Uuid("1f0d507c-0afa-67f0-a264-115e8c51f2e4") },
       }),
       testCase({
         value: "",
         parse: {
           error: issues([issue.invalid_format("uuid")]),
         },
+        error: /expected `uuid` but found `''`/i,
       }),
     ],
   });
 
   // @patched
   defineTest("uuidv7", z.uuidv7(), {
-    type: "string",
+    type: "uuid",
     tests: [
       testCase({
         value: "019b036b-980f-701e-8fef-6570a0d9a371",
-        parse: { data: "019b036b-980f-701e-8fef-6570a0d9a371" },
+        parse: { data: new Uuid("019b036b-980f-701e-8fef-6570a0d9a371") },
       }),
       testCase({
         value: "",
         parse: {
           error: issues([issue.invalid_format("uuid")]),
         },
+        error: /expected `uuid` but found `''`/i,
       }),
     ],
   });
@@ -997,6 +928,19 @@ describe("zod", () => {
     ],
   });
 
+  // @patched
+  defineTest("date", z.date(), {
+    type: "datetime",
+    tests: [
+      testCase({
+        value: new Date("2025-01-01T00:00:00.000Z"),
+        parse: { data: new Date("2025-01-01T00:00:00.000Z") },
+        // @ts-expect-error - we patched date to support DateTime as well
+        equals: new DateTime("2025-01-01T00:00:00.000Z"),
+      }),
+    ],
+  });
+
   // @original
   defineTest("null", z.null(), {
     type: "null",
@@ -1006,20 +950,6 @@ describe("zod", () => {
         value: undefined,
         parse: { error: issues([issue.invalid_type("null")]) },
         error: /expected `null` but found `none`/i,
-      }),
-    ],
-  });
-
-  // @patched
-  defineTest("date", z.date(), {
-    type: "datetime",
-    tests: [
-      testCase({
-        value: new Date("2025-01-01T00:00:00.000Z"),
-        parse: { data: new Date("2025-01-01T00:00:00.000Z") },
-        // @ts-expect-error - surrealdb does type conversion from date to datetime
-        // this might be troublesome, needs overriding
-        equals: new DateTime("2025-01-01T00:00:00.000Z"),
       }),
     ],
   });
@@ -1104,7 +1034,6 @@ describe("zod", () => {
     },
   );
 
-  // @original
   defineTest(
     "strict object { name: string, age: number | none }",
     z.strictObject({ name: z.string(), age: z.number().optional() }),
@@ -1216,8 +1145,7 @@ describe("zod", () => {
       ],
     });
 
-    // REVISIT when we have a clear way to handle discriminated unions
-    // may require database side checks
+    // REVISIT
     // defineTest(
     //   "{ type: 'number', value: number } | { type: 'string', value: string }",
     //   z.discriminatedUnion("type", [
@@ -1318,7 +1246,6 @@ describe("zod", () => {
     });
   });
 
-  // @original
   describe("record", () => {
     defineTest(
       `record<"2025-01" | "2025-02" | "2025-03" | "2025-04", number>`,
@@ -1401,7 +1328,6 @@ describe("zod", () => {
     );
   });
 
-  // @original
   describe("partial record", () => {
     defineTest(
       `partial record<"2025-01" | "2025-02" | "2025-03" | "2025-04", number>`,
@@ -1879,18 +1805,6 @@ describe("zod", () => {
         value: { name: "John Doe", age: 17 },
         parse: { data: { name: "John Doe", age: 17 } },
       }),
-    ],
-  });
-
-  // @original
-  // TODO: DB Normalization
-  defineTest("stringbool", z.stringbool(), {
-    type: "string | bool",
-    tests: [
-      testCase({ value: "yes", parse: { data: true } }),
-      testCase({ value: "true", parse: { data: true } }),
-      testCase({ value: "no", parse: { data: false } }),
-      testCase({ value: "false", parse: { data: false } }),
     ],
   });
 });

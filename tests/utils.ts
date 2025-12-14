@@ -65,25 +65,25 @@ export async function startSurrealTestInstance() {
   };
 }
 
-export type TestCase<T = any> =
+export type TestCase<I = any, P = I> =
   | {
-      value: T;
-      parse?: { data: T } | { error: any };
-      equals?: T;
+      value: I;
+      parse?: { data: P } | { error: any };
+      equals?: P;
     }
   | {
-      value: T;
-      parse?: { data: T } | { error: any };
+      value: P;
+      parse?: { data: P } | { error: any };
       matches: any;
     }
   | {
-      value: T;
-      parse?: { data: T } | { error: any };
-      check(value: T): void | Promise<void>;
+      value: P;
+      parse?: { data: P } | { error: any };
+      check(value: P): void | Promise<void>;
     }
   | {
-      value: T;
-      parse?: { data: T } | { error: any };
+      value: P;
+      parse?: { data: P } | { error: any };
       error: Error | string | RegExp;
     };
 
@@ -110,7 +110,9 @@ export type TestCaseChildField = {
 };
 
 // Helper function to create a properly typed test case
-export const testCase = <T>(test: TestCase<T>): TestCase<T> => test;
+export const testCase = <I = any, P = I>(
+  test: TestCase<I, P>,
+): TestCase<I, P> => test;
 
 export const issues = (issues: any[]) =>
   expect.objectContaining({
@@ -164,10 +166,11 @@ export const issue = {
       code: "missing_keys",
       keys,
     }),
-  invalid_value: (values: string[]) =>
+  invalid_value: (values: string[], extras?: { path?: string[] }) =>
     expect.objectContaining({
       code: "invalid_value",
       values,
+      ...extras,
     }),
 };
 

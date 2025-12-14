@@ -9,6 +9,7 @@ import {
 import * as core from "zod/v4/core";
 import * as classic from "zod/v4";
 import {
+  inferSurrealType,
   tableToSurql,
   type DefineTableOptions,
   type RemoveTableOptions,
@@ -25,7 +26,13 @@ import {
 //////////////////////////////////////////////
 
 export interface SurrealZodInternals {
-  type: string;
+  type: "any" | "record_id" | "table" | "uuid" | "string" | "datetime";
+}
+
+export interface SurrealZodTypeDef<
+  out Internals extends SurrealZodInternals = SurrealZodInternals,
+> extends core.$ZodTypeDef {
+  surreal: Internals;
 }
 
 export interface SurrealZodTypeInternals<
@@ -33,9 +40,7 @@ export interface SurrealZodTypeInternals<
   out I = unknown,
   out SurrealInternals extends SurrealZodInternals = SurrealZodInternals,
 > extends core.$ZodTypeInternals<O, I> {
-  def: core.$ZodTypeInternals<O, I>["def"] & {
-    surreal: SurrealInternals;
-  };
+  def: SurrealZodTypeDef<SurrealInternals>;
 }
 
 export interface SurrealZodType<
@@ -59,8 +64,9 @@ export const SurrealZodType: core.$constructor<SurrealZodType> =
     // @ts-expect-error - we will be overriding the type property
     delete inst.type;
 
-    // Casting as _surreal.type is built while the schema is initialized
-    inst._zod.def.surreal ??= {} as SurrealZodInternals;
+    inst._zod.def.surreal ??= {
+      type: "any",
+    };
 
     return inst;
   });
@@ -73,14 +79,19 @@ export const SurrealZodType: core.$constructor<SurrealZodType> =
 //////////////////////////////////////////////////
 //////////////////////////////////////////////////
 
-export type SurrealZodRecordIdValue =
-  | classic.ZodAny
-  | classic.ZodUnknown
-  | classic.ZodString
-  | classic.ZodNumber
-  | classic.ZodBigInt
-  | classic.ZodObject
-  | classic.ZodArray;
+export type SurrealZodRecordIdValue = classic.ZodType<RecordIdValue, unknown>;
+
+export type inferRecordIdValue<Id extends SurrealZodRecordIdValue> =
+  Id extends {
+    _zod: {
+      output: any;
+    };
+  }
+    ? Id["_zod"]["output"]
+    : RecordIdValue;
+
+export type inferRecordIdTable<T extends SurrealZodRecordId<string, any>> =
+  T extends SurrealZodRecordId<infer N> ? N : never;
 
 export interface SurrealZodRecordIdDef<
   Table extends string = string,
@@ -94,21 +105,12 @@ export interface SurrealZodRecordIdDef<
   };
 }
 
-export type RecordIdValueOutput<Id extends SurrealZodRecordIdValue> =
-  Id extends {
-    _zod: {
-      output: any;
-    };
-  }
-    ? Id["_zod"]["output"]
-    : RecordIdValue;
-
 export interface SurrealZodRecordIdInternals<
   Table extends string = string,
   Id extends SurrealZodRecordIdValue = SurrealZodRecordIdValue,
 > extends SurrealZodTypeInternals<
-    RecordId<Table, RecordIdValueOutput<Id>>,
-    RecordIdValue
+    RecordId<Table, inferRecordIdValue<Id>>,
+    unknown
   > {
   def: SurrealZodRecordIdDef<Table, Id>;
 }
@@ -141,26 +143,25 @@ export interface SurrealZodRecordId<
 }
 
 function normalizeRecordIdDef(def: SurrealZodRecordIdDef) {
-  const invalidType = getInvalidRecordIdValueSchema(def.innerType);
-  if (invalidType) {
-    throw new Error(`${invalidType} is not valid as a RecordId's value`);
+  const { type, context } = inferSurrealType(def.innerType);
+  const isValid = Array.from(context.type).every(
+    (option) =>
+      ["any", "string", "number", "int", "array", "object"].includes(option) ||
+      option.startsWith("array<") ||
+      option.startsWith("[") ||
+      option.startsWith("{") ||
+      option.startsWith("'") ||
+      option.startsWith('"') ||
+      /^\d+(\.\d+)?f?$/.test(option),
+  );
+
+  if (!isValid) {
+    throw new Error(`${type} is not valid as a RecordId's value`);
   }
 
   return {
     ...def,
   };
-}
-
-function getInvalidRecordIdValueSchema(schema: core.$ZodType) {
-  const def = schema._zod.def;
-  switch (def.type) {
-    case "any":
-    case "string":
-    case "number":
-      return "";
-    default:
-      return def.type;
-  }
 }
 
 export const SurrealZodRecordId: core.$constructor<SurrealZodRecordId> =
@@ -235,11 +236,10 @@ export const SurrealZodRecordId: core.$constructor<SurrealZodRecordId> =
           result.value as any,
         );
       } else {
+        // @ts-expect-error - Issues dont know about surreal types
         payload.issues.push({
           code: "invalid_type",
-          // TODO: Surreal specific issues
-          expected: "custom",
-          input: payload.value,
+          expected: "record_id",
         });
       }
 
@@ -249,10 +249,13 @@ export const SurrealZodRecordId: core.$constructor<SurrealZodRecordId> =
     return inst;
   });
 
-export function recordId<const W extends string | string[]>(
+export function recordId<
+  const W extends string | string[],
+  I extends SurrealZodRecordIdValue = SurrealZodRecordIdValue,
+>(
   what?: W,
-  innerType?: SurrealZodRecordIdValue,
-): SurrealZodRecordId<W extends string ? W : W[number]> {
+  innerType?: I,
+): SurrealZodRecordId<W extends string ? W : W[number], I> {
   return new SurrealZodRecordId({
     // Zod would not be happy if we have a custom type here, so we use any
     type: "any",
@@ -265,9 +268,6 @@ export function recordId<const W extends string | string[]>(
   }) as any;
 }
 
-export type inferRecordIdTable<T extends SurrealZodRecordId<string, any>> =
-  T extends SurrealZodRecordId<infer N> ? N : never;
-
 ///////////////////////////////////////////////
 ///////////////////////////////////////////////
 //////////                           //////////
@@ -277,7 +277,13 @@ export type inferRecordIdTable<T extends SurrealZodRecordId<string, any>> =
 ///////////////////////////////////////////////
 
 export type SurrealZodTableFields = {
-  [key: string]: SurrealZodType;
+  [key: string]: core.$ZodType;
+};
+
+export type SurrealZodTableRelationFields = {
+  [K in "in" | "out"]?: SurrealZodRecordId<string, SurrealZodRecordIdValue>;
+} & {
+  [key: string]: core.$ZodType;
 };
 
 /**
@@ -288,45 +294,63 @@ type NormalizedIdField<
   TableName extends string,
   Fields extends SurrealZodTableFields,
   FieldName extends string,
-> = Fields extends {
-  [K in FieldName]: SurrealZodType;
-}
-  ? Fields[FieldName] extends SurrealZodRecordId<infer _N, infer T>
-    ? Omit<Fields, FieldName> & {
-        [K in FieldName]: SurrealZodRecordId<TableName, T>;
-      }
-    : Fields[FieldName] extends SurrealZodRecordIdValue
-      ? Omit<Fields, FieldName> & {
-          [K in FieldName]: SurrealZodRecordId<TableName, Fields[FieldName]>;
-        }
-      : Omit<Fields, FieldName> & {
-          [K in FieldName]: SurrealZodRecordId<TableName>;
-        }
-  : Fields & {
-      [K in FieldName]: SurrealZodRecordId<TableName>;
-    };
+> = {
+  [K in keyof Fields | FieldName]: K extends FieldName
+    ? Fields extends { [P in FieldName]: infer F }
+      ? F extends SurrealZodRecordId<any, infer T>
+        ? SurrealZodRecordId<TableName, T>
+        : F extends SurrealZodRecordIdValue
+          ? SurrealZodRecordId<TableName, F>
+          : SurrealZodRecordId<TableName>
+      : SurrealZodRecordId<TableName>
+    : K extends keyof Fields
+      ? Fields[K]
+      : never;
+};
 
 export type NormalizedFields<
   TableName extends string = string,
   Fields extends SurrealZodTableFields = {},
-> = core.util.Prettify<NormalizedIdField<TableName, Fields, "id">>;
+> = NormalizedIdField<TableName, Fields, "id">;
 
-type SetConfig<Key extends string, Value> = {
+export type SetConfig<Key extends string, Value> = {
   [key in Key]: Value;
 };
-type MergeConfig<
+export type MergeConfig<
   A extends Partial<SurrealZodTableConfig>,
   B extends Partial<SurrealZodTableConfig>,
-> = core.util.Prettify<Omit<A, keyof B> & B>;
-type SurrealZodTableConfigSchemafull = SetConfig<"catchall", {}>;
-type SurrealZodTableConfigSchemaless = SetConfig<
+> = Omit<A, keyof B> & B;
+export type SurrealZodTableConfigSchemafull = SetConfig<"catchall", {}>;
+export type SurrealZodTableConfigSchemaless = SetConfig<
   "catchall",
-  Record<string, SurrealZodType>
+  Record<string, unknown>
 >;
-type SurrealZodTableConfig = {
+export type SurrealZodTableConfig = {
   catchall: any;
   dto: boolean;
 };
+
+/**
+ * Helper type that makes the id field optional for DTO mode.
+ * Uses [IsDto] extends [true] to avoid distributive conditionals.
+ */
+type ApplyDtoToFields<
+  NormFields extends SurrealZodTableFields,
+  IsDto extends boolean,
+> = [IsDto] extends [true]
+  ? Omit<NormFields, "id"> & { id: classic.ZodOptional<NormFields["id"]> }
+  : NormFields;
+
+/**
+ * Precomputed fields type that combines normalization and DTO transformation.
+ * Uses a single NormalizedFields computation to avoid redundant type expansion.
+ */
+type TableDefFields<
+  Name extends string,
+  Fields extends SurrealZodTableFields,
+  Config extends SurrealZodTableConfig,
+> = ApplyDtoToFields<NormalizedFields<Name, Fields>, Config["dto"]> &
+  Config["catchall"];
 
 export interface SurrealZodTableDef<
   Name extends string = string,
@@ -334,13 +358,8 @@ export interface SurrealZodTableDef<
   Config extends SurrealZodTableConfig = SurrealZodTableConfig,
 > extends core.$ZodTypeDef {
   name: Name;
-  fields: (Config["dto"] extends true
-    ? Omit<NormalizedFields<Name, Fields>, "id"> & {
-        id: classic.ZodOptional<NormalizedFields<Name, Fields>["id"]>;
-      }
-    : NormalizedFields<Name, Fields>) &
-    Config["catchall"];
-  catchall?: SurrealZodType;
+  fields: TableDefFields<Name, Fields, Config>;
+  catchall?: core.$ZodType;
   dto: Config["dto"];
 
   surreal: {
@@ -359,72 +378,326 @@ export interface SurrealZodTableInternals<
     SurrealZodTableConfig,
     SurrealZodTableConfigSchemaless
   >,
-> extends SurrealZodTypeInternals {
+> extends SurrealZodTypeInternals<
+    core.$InferObjectOutput<Fields, Config["catchall"]>
+  > {
   def: SurrealZodTableDef<Name, Fields, Config>;
 }
 
-export interface SurrealZodTable<
+export type TableKind = "any" | "normal" | "relation";
+
+type RelationMethods<
+  Name extends string,
+  Fields extends SurrealZodTableFields,
+  Config extends SurrealZodTableConfig,
+> = {
+  from<
+    NewFrom extends
+      | string
+      | string[]
+      | SurrealZodRecordId<string, SurrealZodRecordIdValue>,
+  >(
+    from: NewFrom,
+  ): SurrealZodTable<
+    Name,
+    Omit<Fields, "in"> & { in: toRecordId<NewFrom> },
+    Config,
+    "relation"
+  >;
+
+  to<
+    NewTo extends
+      | string
+      | string[]
+      | SurrealZodRecordId<string, SurrealZodRecordIdValue>,
+  >(
+    to: NewTo,
+  ): SurrealZodTable<
+    Name,
+    Omit<Fields, "out"> & { out: toRecordId<NewTo> },
+    Config,
+    "relation"
+  >;
+
+  in: RelationMethods<Name, Fields, Config>["from"];
+  out: RelationMethods<Name, Fields, Config>["to"];
+};
+
+type MaybeRelationMethods<
+  Kind extends TableKind,
+  Name extends string,
+  Fields extends SurrealZodTableFields,
+  Config extends SurrealZodTableConfig,
+> = Kind extends "relation" ? RelationMethods<Name, Fields, Config> : {};
+
+type TableMask<Keys extends PropertyKey, Kind extends TableKind> = {
+  [K in Exclude<
+    Keys,
+    "id" | (Kind extends "relation" ? "in" | "out" : never)
+  >]?: true;
+} & {
+  id?: boolean;
+} & (Kind extends "relation"
+    ? {
+        in?: boolean;
+        out?: boolean;
+      }
+    : {});
+
+export type SurrealZodTable<
   Name extends string = string,
   Fields extends SurrealZodTableFields = {},
   Config extends SurrealZodTableConfig = MergeConfig<
     SurrealZodTableConfig,
     SurrealZodTableConfigSchemaless
   >,
-> extends _SurrealZodType<SurrealZodTableInternals<Name, Fields, Config>> {
-  // type specific, must be overriden in super types
-  name<NewName extends string>(name: NewName): SurrealZodTable<NewName, Fields>;
-  fields<NewFields extends SurrealZodTableFields>(
-    fields: NewFields,
-  ): SurrealZodTable<Name, NewFields, Config>;
-  schemafull(): SurrealZodTable<
+  Kind extends TableKind = "any",
+> = _SurrealZodType<
+  SurrealZodTableInternals<
     Name,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-  schemaless(): SurrealZodTable<
-    Name,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemaless>
-  >;
-
-  // super type changing
-  any(): SurrealZodTable<Name, Fields, Config>;
-  normal(): SurrealZodTableNormal<Name, Fields, Config>;
-  relation(): SurrealZodTableRelation<
-    Name,
-    SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-    SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-    Fields,
+    ApplyDtoToFields<NormalizedFields<Name, Fields>, Config["dto"]>,
     Config
-  >;
+  >
+> &
+  MaybeRelationMethods<Kind, Name, Fields, Config> & {
+    name<NewName extends string>(
+      name: NewName,
+    ): SurrealZodTable<NewName, Fields, Config, Kind>;
+    fields<
+      NewFields extends Kind extends "relation"
+        ? SurrealZodTableRelationFields
+        : SurrealZodTableFields,
+    >(
+      fields: NewFields,
+    ): SurrealZodTable<
+      Name,
+      Kind extends "relation"
+        ? {
+            [K in "in" | "out" as K extends keyof NewFields
+              ? K
+              : never]: NewFields[K];
+          } & {
+            [K in "in" | "out" as K extends keyof NewFields
+              ? never
+              : K extends keyof Fields
+                ? K
+                : never]: Fields[K];
+          } & Omit<NewFields, "in" | "out">
+        : NewFields,
+      Config,
+      Kind
+    >;
+    schemafull(): SurrealZodTable<
+      Name,
+      Fields,
+      MergeConfig<Config, SurrealZodTableConfigSchemafull>,
+      Kind
+    >;
+    schemaless(): SurrealZodTable<
+      Name,
+      Fields,
+      MergeConfig<Config, SurrealZodTableConfigSchemaless>,
+      Kind
+    >;
 
-  drop(): this;
-  nodrop(): this;
-  comment(comment: string): this;
+    any(): SurrealZodTable<Name, Fields, Config, "any">;
+    normal(): SurrealZodTable<Name, Fields, Config, "normal">;
+    relation(): SurrealZodTable<
+      Name,
+      {
+        [K in "in" | "out"]: Fields[K] extends SurrealZodRecordId
+          ? Fields[K]
+          : SurrealZodRecordId<string, SurrealZodRecordIdValue>;
+      } & Omit<Fields, "in" | "out">,
+      Config,
+      "relation"
+    >;
 
-  record(): this["_zod"]["def"]["fields"]["id"];
-  dto(): SurrealZodTable<
-    Name,
-    Fields,
-    MergeConfig<Config, SetConfig<"dto", true>>
-  >;
-  entity(): SurrealZodTable<
-    Name,
-    Fields,
-    MergeConfig<Config, SetConfig<"dto", false>>
-  >;
+    drop(): SurrealZodTable<Name, Fields, Config, Kind>;
+    nodrop(): SurrealZodTable<Name, Fields, Config, Kind>;
+    comment(comment: string): SurrealZodTable<Name, Fields, Config, Kind>;
 
-  toSurql(
-    statement?: "define",
-    options?: DefineTableOptions,
-  ): BoundQuery<[undefined]>;
-  toSurql(
-    statement: "remove",
-    options?: RemoveTableOptions,
-  ): BoundQuery<[undefined]>;
-  toSurql(statement: "info"): BoundQuery<[TableInfo]>;
-  toSurql(statement: "structure"): BoundQuery<[TableStructure]>;
-}
+    record(): SurrealZodTable<
+      Name,
+      Fields,
+      Config,
+      Kind
+    >["_zod"]["def"]["fields"]["id"];
+    dto(): classic.ZodObject<
+      Omit<Fields, "id"> & { id: classic.ZodOptional<Fields["id"]> },
+      {
+        in: Config["catchall"];
+        out: Config["catchall"];
+      }
+    >;
+
+    toSurql(
+      statement?: "define",
+      options?: DefineTableOptions,
+    ): BoundQuery<[undefined]>;
+    toSurql(
+      statement: "remove",
+      options?: RemoveTableOptions,
+    ): BoundQuery<[undefined]>;
+    toSurql(statement: "info"): BoundQuery<[TableInfo]>;
+    toSurql(statement: "structure"): BoundQuery<[TableStructure]>;
+
+    // object methods
+
+    extend<
+      ExtraFields extends Kind extends "relation"
+        ? SurrealZodTableRelationFields
+        : SurrealZodTableFields,
+    >(
+      extraFields: ExtraFields,
+    ): SurrealZodTable<
+      Name,
+      core.util.Extend<Fields, ExtraFields>,
+      Config,
+      Kind
+    >;
+
+    safeExtend<
+      ExtraFields extends Kind extends "relation"
+        ? SurrealZodTableRelationFields
+        : SurrealZodTableFields,
+    >(
+      shape: classic.SafeExtendShape<Fields, ExtraFields> &
+        Partial<Record<keyof Fields, core.SomeType>>,
+    ): SurrealZodTable<
+      Name,
+      core.util.Extend<Fields, ExtraFields>,
+      Config,
+      Kind
+    >;
+
+    pick<M extends TableMask<keyof Fields, Kind>>(
+      mask: M,
+    ): M extends { id: false }
+      ? classic.ZodObject<
+          core.util.Flatten<
+            Pick<Fields, Extract<Exclude<keyof Fields, "id">, keyof M>>
+          >,
+          {
+            out: Config["catchall"];
+            in: Config["catchall"];
+          }
+        >
+      : SurrealZodTable<
+          Name,
+          core.util.Flatten<
+            Pick<Fields, Extract<keyof Fields, keyof M | "id">>
+          >,
+          Config,
+          Kind
+        >;
+
+    omit<M extends TableMask<keyof Fields, Kind>>(
+      mask: M,
+    ): M extends { id: true }
+      ? classic.ZodObject<
+          core.util.Flatten<Omit<Fields, Extract<keyof Fields, keyof M>>>,
+          {
+            in: Config["catchall"];
+            out: Config["catchall"];
+          }
+        >
+      : SurrealZodTable<
+          Name,
+          core.util.Flatten<Omit<Fields, Extract<keyof Fields, keyof M>>>,
+          Config,
+          Kind
+        >;
+
+    /**
+     * @returns a table schema that is partial for all fields, except for `id`
+     */
+    partial(): SurrealZodTable<
+      Name,
+      {
+        [k in keyof Fields]: classic.ZodOptional<Fields[k]>;
+      },
+      Config,
+      Kind
+    >;
+
+    /**
+     * @returns an object schema that is partial for all fields, including `id`.
+     * This is equivalent to calling `.dto().partial()`
+     */
+    partial(mask: true): classic.ZodObject<
+      core.util.Flatten<{
+        [k in keyof Fields | "id"]: k extends "id"
+          ? Fields["id"] extends SurrealZodRecordId<infer N, infer I>
+            ? classic.ZodOptional<SurrealZodRecordId<N, I>>
+            : classic.ZodOptional<
+                SurrealZodRecordId<Name, SurrealZodRecordIdValue>
+              >
+          : classic.ZodOptional<Fields[k]>;
+      }>,
+      {
+        out: Config["catchall"];
+        in: Config["catchall"];
+      }
+    >;
+
+    /**
+     * @returns an object schema that is partial for the fields specified in
+     * the mask, if id is specified in the mask, it will be marked as optional
+     * and an object schema will be returned instead of a table schema.
+     */
+    partial<M extends TableMask<keyof Fields, Kind>>(
+      mask?: M,
+    ): M extends { id: true }
+      ? classic.ZodObject<
+          core.util.Flatten<{
+            [k in keyof Fields | "id"]: k extends keyof M
+              ? k extends "id"
+                ? Fields["id"] extends SurrealZodRecordId<infer N, infer I>
+                  ? classic.ZodOptional<SurrealZodRecordId<N, I>>
+                  : classic.ZodOptional<
+                      SurrealZodRecordId<Name, SurrealZodRecordIdValue>
+                    >
+                : classic.ZodOptional<Fields[k]>
+              : Fields[k];
+          }>,
+          {
+            out: Config["catchall"];
+            in: Config["catchall"];
+          }
+        >
+      : SurrealZodTable<
+          Name,
+          {
+            [k in keyof Fields]: k extends keyof M
+              ? classic.ZodOptional<Fields[k]>
+              : Fields[k];
+          },
+          Config,
+          Kind
+        >;
+
+    required(): SurrealZodTable<
+      Name,
+      {
+        [k in keyof Fields]: classic.ZodNonOptional<Fields[k]>;
+      },
+      Config,
+      Kind
+    >;
+    required<M extends core.util.Mask<keyof Fields>>(
+      mask: M,
+    ): SurrealZodTable<
+      Name,
+      {
+        [k in keyof Fields]: k extends keyof M
+          ? classic.ZodNonOptional<Fields[k]>
+          : Fields[k];
+      },
+      Config,
+      Kind
+    >;
+  };
 
 function handleFieldResult(
   result: core.ParsePayload,
@@ -438,11 +711,11 @@ function handleFieldResult(
 
   if (result.value === undefined) {
     if (field in input) {
-      // @ts-expect-error: field not index-checked on final.value
+      // @ts-expect-error: field not index-checked on final.value, doesnt matter
       final.value[field] = undefined;
     }
   } else {
-    // @ts-expect-error: field not index-checked on final.value
+    // @ts-expect-error: field not index-checked on final.value, doesnt matter
     final.value[field] = result.value;
   }
 }
@@ -492,22 +765,30 @@ function handleCatchall(
 }
 
 function normalizeTableDef(def: SurrealZodTableDef) {
-  const fields: Record<string, SurrealZodType> = {};
+  const fields: Record<string, core.$ZodType> = {};
   const fieldNames = Object.keys(def.fields);
-
-  if (def.fields.id) {
-    if (def.fields.id instanceof SurrealZodRecordId) {
-      fields.id = def.fields.id.table(def.name);
-    } else {
-      fields.id = recordId(def.name).type(def.fields.id);
-    }
-  } else {
+  if (!def.fields.id) {
     fields.id = recordId(def.name).type(classic.any());
     fieldNames.push("id");
-  }
-
-  if (def.dto && !(fields.id?._zod.def.type === "optional")) {
-    fields.id = classic.optional(fields.id!);
+  } else if (def.fields.id._zod.traits.has("$ZodOptional")) {
+    if (
+      !def.dto ||
+      !(def.fields.id._zod.def.innerType instanceof SurrealZodRecordId)
+    ) {
+      throw new Error(
+        "Invalid table definition: When using .dto() we try to make the id field optional, " +
+          "the inner type must be a SurrealZodRecordId but it is not. This is supposed to " +
+          "be impossible, likely an internal library error. Please open an issue at " +
+          "https://github.com/msanchezdev/surreal-zod/issues with a minimal reproduction.",
+      );
+    }
+    fields.id = def.fields.id;
+  } else if (def.fields.id instanceof SurrealZodRecordId) {
+    const base = def.fields.id.table(def.name);
+    fields.id = def.dto ? classic.optional(base) : base;
+  } else {
+    const base = recordId(def.name).type(def.fields.id);
+    fields.id = def.dto ? classic.optional(base) : base;
   }
 
   for (const field of fieldNames) {
@@ -544,12 +825,53 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
       }) as any;
     };
     inst.fields = (fields) => {
+      if (inst._zod.def.surreal.tableType === "relation") {
+        fields = {
+          in: inst._zod.def.fields.in ?? recordId().type(classic.any()),
+          out: inst._zod.def.fields.out ?? recordId().type(classic.any()),
+          ...fields,
+        };
+      }
+
       return inst.clone({
         ...inst._zod.def,
         // @ts-expect-error - id may or may not be provided
         fields,
       }) as any;
     };
+    // @ts-expect-error - type defined conditionally
+    inst.from = (from) => {
+      if (inst._zod.def.surreal.tableType !== "relation") {
+        throw new Error("Cannot call .from() on a non-relation table");
+      }
+
+      return inst.clone({
+        ...inst._zod.def,
+        fields: {
+          ...inst._zod.def.fields,
+          in: from instanceof SurrealZodRecordId ? from : recordId(from),
+        },
+      }) as any;
+    };
+    // @ts-expect-error - type defined conditionally
+    inst.to = (to) => {
+      if (inst._zod.def.surreal.tableType !== "relation") {
+        throw new Error("Cannot call .to() on a non-relation table");
+      }
+
+      return inst.clone({
+        ...inst._zod.def,
+        fields: {
+          ...inst._zod.def.fields,
+          out: to instanceof SurrealZodRecordId ? to : recordId(to),
+        },
+      }) as any;
+    };
+    // @ts-expect-error - type defined conditionally
+    inst.in = inst.from;
+    // @ts-expect-error - type defined conditionally
+    inst.out = inst.to;
+
     inst.any = () => {
       return inst.clone({
         ...inst._zod.def,
@@ -557,29 +879,27 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
           ...inst._zod.def.surreal,
           tableType: "any",
         },
-      });
+      }) as any;
     };
     inst.normal = () => {
-      return new SurrealZodTableNormal({
+      return inst.clone({
         ...inst._zod.def,
         surreal: {
           ...inst._zod.def.surreal,
           tableType: "normal",
         },
-      });
+      }) as any;
     };
     inst.relation = () => {
-      // @ts-expect-error - id set in constructor
-      return new SurrealZodTableRelation({
+      return inst.clone({
         ...inst._zod.def,
-        // fields: {
-        //   in: recordId().type(any()),
-        //   out: recordId().type(any()),
-        //   ...def.fields,
-        // },
+        fields: {
+          in: recordId().type(classic.any()),
+          out: recordId().type(classic.any()),
+          ...inst._zod.def.fields,
+        },
         surreal: {
           ...inst._zod.def.surreal,
-
           tableType: "relation",
         },
       }) as any;
@@ -591,7 +911,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
           ...inst._zod.def.surreal,
           comment,
         },
-      });
+      }) as any;
     };
     inst.schemafull = () => {
       return inst.clone({
@@ -601,7 +921,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
           ...inst._zod.def.surreal,
           schemafull: true,
         },
-      });
+      }) as any;
     };
     inst.schemaless = () => {
       return inst.clone({
@@ -611,7 +931,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
           ...inst._zod.def.surreal,
           schemafull: false,
         },
-      });
+      }) as any;
     };
     inst.drop = () => {
       return inst.clone({
@@ -620,7 +940,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
           ...inst._zod.def.surreal,
           drop: true,
         },
-      });
+      }) as any;
     };
     inst.nodrop = () => {
       return inst.clone({
@@ -629,35 +949,222 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
           ...inst._zod.def.surreal,
           drop: false,
         },
-      });
-    };
-    // @ts-expect-error - through normalization id is always present
-    inst.record = () => normalized.fields.id;
-    inst.dto = () => {
-      return inst.clone({
-        ...inst._zod.def,
-        dto: true,
       }) as any;
     };
-    inst.entity = () => {
-      let id: any = normalized.fields.id;
-      while (id?._zod.def.type === "optional") {
-        id = id.unwrap();
-      }
-
-      return inst.clone({
-        ...inst._zod.def,
-        dto: false,
-        fields: {
-          ...normalized.fields,
-          id,
+    inst.record = () => inst._zod.def.fields.id;
+    inst.dto = () => {
+      return new classic.ZodObject({
+        type: "object",
+        shape: {
+          ...inst._zod.def.fields,
+          id: classic.optional(inst._zod.def.fields.id),
         },
+        catchall: inst._zod.def.catchall,
       }) as any;
     };
     // @ts-expect-error - overloaded
     inst.toSurql = (statement = "define", options) =>
       // @ts-expect-error - overloaded
       tableToSurql(inst, statement, options);
+
+    // @ts-expect-error - false-positive
+    inst.extend = (extraFields) => {
+      if (!core.util.isPlainObject(extraFields)) {
+        throw new Error("Invalid input to extend: expected a plain object");
+      }
+
+      const checks = inst._zod.def.checks;
+      const hasChecks = checks && checks.length > 0;
+      if (hasChecks) {
+        throw new Error(
+          "Table schemas containing refinements cannot be extended. Use `.safeExtend()` instead.",
+        );
+      }
+
+      const mergedDef = core.util.mergeDefs(inst._zod.def, {
+        get fields() {
+          const fields = { ...inst._zod.def.fields, ...extraFields };
+          core.util.assignProp(this, "fields", fields); // self-caching
+          return fields;
+        },
+        checks: [],
+      });
+
+      return core.clone(inst, mergedDef);
+    };
+
+    // @ts-expect-error - false-positive
+    inst.safeExtend = (extraFields) => {
+      if (!core.util.isPlainObject(extraFields)) {
+        throw new Error("Invalid input to safeExtend: expected a plain object");
+      }
+      const def = {
+        ...inst._zod.def,
+        get fields() {
+          const fields = { ...inst._zod.def.fields, ...extraFields };
+          core.util.assignProp(this, "fields", fields); // self-caching
+          return fields;
+        },
+        checks: inst._zod.def.checks,
+      } as any;
+      return core.clone(inst, def);
+    };
+
+    inst.pick = (mask) => {
+      const currDef = inst._zod.def;
+
+      const def = core.util.mergeDefs(inst._zod.def, {
+        get fields() {
+          const newFields: Record<string, unknown> = {};
+          for (const key in mask) {
+            if (!(key in currDef.fields)) {
+              throw new Error(`Unrecognized key: "${key}"`);
+            }
+            if (!mask[key]) continue;
+            newFields[key] = currDef.fields[key]!;
+          }
+
+          core.util.assignProp(this, "fields", newFields); // self-caching
+          return newFields;
+        },
+        checks: [],
+      });
+
+      if ("id" in mask && mask.id === false) {
+        return new classic.ZodObject({
+          type: "object",
+          shape: def.fields,
+          catchall: def.catchall,
+        }) as any;
+      }
+
+      return core.clone(inst, def) as any;
+    };
+
+    inst.omit = (mask) => {
+      const currDef = inst._zod.def;
+
+      const def = core.util.mergeDefs(inst._zod.def, {
+        get fields() {
+          const newFields: Record<string, unknown> = { ...currDef.fields };
+          for (const key in mask) {
+            if (!(key in currDef.fields)) {
+              throw new Error(`Unrecognized key: "${key}"`);
+            }
+            if (!(mask as any)[key]) continue;
+
+            delete newFields[key];
+          }
+          core.util.assignProp(this, "fields", newFields); // self-caching
+          return newFields;
+        },
+        checks: [],
+      });
+
+      if ("id" in mask && mask.id === true) {
+        return new classic.ZodObject({
+          type: "object",
+          shape: def.fields,
+          catchall: def.catchall,
+        }) as any;
+      }
+
+      return core.clone(inst, def) as any;
+    };
+
+    inst.partial = (mask?: Record<string, boolean> | boolean) => {
+      const def = core.util.mergeDefs(inst._zod.def, {
+        get fields() {
+          const oldFields = inst._zod.def.fields;
+          const fields: Record<string, unknown> = { ...oldFields };
+
+          if (typeof mask === "object") {
+            for (const key in mask) {
+              if (!(key in oldFields)) {
+                throw new Error(`Unrecognized key: "${key}"`);
+              }
+              if (!(mask as any)[key]) continue;
+              // if (oldShape[key]!._zod.optin === "optional") continue;
+              fields[key] = classic.ZodOptional
+                ? new classic.ZodOptional({
+                    type: "optional",
+                    innerType: oldFields[key]! as any,
+                  })
+                : oldFields[key]!;
+            }
+          } else {
+            for (const key in oldFields) {
+              if (key === "id" && mask !== true) continue;
+
+              // if (oldShape[key]!._zod.optin === "optional") continue;
+              fields[key] = classic.ZodOptional
+                ? new classic.ZodOptional({
+                    type: "optional",
+                    innerType: oldFields[key]! as any,
+                  })
+                : oldFields[key]!;
+            }
+          }
+
+          core.util.assignProp(this, "fields", fields); // self-caching
+          return fields;
+        },
+        checks: [],
+      });
+
+      if (
+        mask === true ||
+        (typeof mask === "object" && "id" in mask && mask.id === true)
+      ) {
+        return new classic.ZodObject({
+          type: "object",
+          shape: def.fields,
+          catchall: def.catchall,
+        }) as any;
+      }
+
+      return core.clone(inst, def) as any;
+    };
+
+    inst.required = (mask?: Record<string, boolean>) => {
+      const def = core.util.mergeDefs(inst._zod.def, {
+        get fields() {
+          const oldFields = inst._zod.def.fields;
+          const fields: Record<string, unknown> = { ...oldFields };
+
+          if (mask) {
+            for (const key in mask) {
+              if (!(key in fields)) {
+                throw new Error(`Unrecognized key: "${key}"`);
+              }
+              if (!(mask as any)[key]) continue;
+              if (key === "id") continue;
+              // overwrite with non-optional
+              fields[key] = new classic.ZodNonOptional({
+                type: "nonoptional",
+                innerType: oldFields[key]! as any,
+              });
+            }
+          } else {
+            for (const key in oldFields) {
+              if (key === "id") continue;
+
+              // overwrite with non-optional
+              fields[key] = new classic.ZodNonOptional({
+                type: "nonoptional",
+                innerType: oldFields[key]! as any,
+              });
+            }
+          }
+
+          core.util.assignProp(this, "fields", fields); // self-caching
+          return fields;
+        },
+        checks: [],
+      });
+
+      return core.clone(inst, def) as any;
+    };
 
     inst._zod.parse = (payload, ctx) => {
       const input = payload.value;
@@ -678,6 +1185,7 @@ export const SurrealZodTable: core.$constructor<SurrealZodTable> =
 
       for (const field of normalized.fieldNames) {
         const schema = fields[field]!;
+
         const result = schema._zod.run(
           { value: input[field], issues: [] },
           ctx,
@@ -712,6 +1220,7 @@ export function table<Name extends string = string>(name: Name) {
     // @ts-expect-error - id set in constructor
     fields: {},
     catchall: classic.unknown(),
+    dto: false,
 
     surreal: {
       type: "table",
@@ -723,60 +1232,7 @@ export function table<Name extends string = string>(name: Name) {
   }) as SurrealZodTable<Name>;
 }
 
-/////////////////////////////////////////////////////
-/////////////////////////////////////////////////////
-//////////                                 //////////
-//////////      SurrealZodTableNormal      //////////
-//////////                                 //////////
-/////////////////////////////////////////////////////
-/////////////////////////////////////////////////////
-
-export interface SurrealZodTableNormal<
-  Name extends string = string,
-  Fields extends SurrealZodTableFields = {},
-  Config extends SurrealZodTableConfig = MergeConfig<
-    SurrealZodTableConfig,
-    SurrealZodTableConfigSchemaless
-  >,
-> extends SurrealZodTable<Name, Fields, Config> {
-  // override base methods
-  name<NewName extends string>(
-    name: NewName,
-  ): SurrealZodTableNormal<NewName, Fields, Config>;
-  fields<NewFields extends SurrealZodTableFields>(
-    fields: NewFields,
-  ): SurrealZodTableNormal<Name, NewFields, Config>;
-  schemafull(): SurrealZodTableNormal<
-    Name,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-  schemaless(): SurrealZodTableNormal<
-    Name,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemaless>
-  >;
-
-  dto(): SurrealZodTableNormal<
-    Name,
-    Fields,
-    MergeConfig<Config, SetConfig<"dto", true>>
-  >;
-  entity(): SurrealZodTableNormal<
-    Name,
-    Fields,
-    MergeConfig<Config, SetConfig<"dto", false>>
-  >;
-}
-
-export const SurrealZodTableNormal: core.$constructor<SurrealZodTableNormal> =
-  core.$constructor("SurrealZodTableNormal", (inst, def) => {
-    SurrealZodTable.init(inst, def);
-  });
-
-export function normalTable<Name extends string = string>(
-  name: Name,
-): SurrealZodTableNormal<Name> {
+export function normalTable<Name extends string = string>(name: Name) {
   return table(name).normal();
 }
 
@@ -788,130 +1244,33 @@ export function normalTable<Name extends string = string>(
 ///////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////
 
-export interface SurrealZodTableRelation<
-  Name extends string = string,
-  From extends SurrealZodRecordId<
-    string,
-    SurrealZodRecordIdValue
-  > = SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-  To extends SurrealZodRecordId<
-    string,
-    SurrealZodRecordIdValue
-  > = SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-  Fields extends SurrealZodTableFields = {},
-  Config extends SurrealZodTableConfig = MergeConfig<
-    SurrealZodTableConfig,
-    SurrealZodTableConfigSchemaless
-  >,
-> extends SurrealZodTable<
-    Name,
-    NormalizedIdField<
-      inferRecordIdTable<To>,
-      NormalizedIdField<
-        inferRecordIdTable<From>,
-        Fields & {
-          in: From;
-          out: To;
-        },
-        "in"
-      >,
-      "out"
-    >,
-    Config
-  > {
-  name<NewName extends string>(
-    name: NewName,
-  ): SurrealZodTableRelation<NewName, From, To, Fields, Config>;
-  fields<NewFields extends SurrealZodTableFields>(
-    fields: NewFields,
-  ): SurrealZodTableRelation<Name, From, To, NewFields, Config>;
-  schemafull(): SurrealZodTableRelation<
-    Name,
-    From,
-    To,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-  schemaless(): SurrealZodTableRelation<
-    Name,
-    From,
-    To,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemaless>
-  >;
-
-  from<
-    NewFrom extends
-      | string
-      | string[]
-      | SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-  >(
-    from: NewFrom,
-  ): SurrealZodTableRelation<
-    Name extends string ? Name : Name[number],
-    toRecordId<NewFrom>,
-    To,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-  to<
-    NewTo extends
-      | string
-      | string[]
-      | SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-  >(
-    to: NewTo,
-  ): SurrealZodTableRelation<
-    Name extends string ? Name : Name[number],
-    From,
-    toRecordId<NewTo>,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-  in<
-    NewFrom extends
-      | string
-      | string[]
-      | SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-  >(
-    from: NewFrom,
-  ): SurrealZodTableRelation<
-    Name extends string ? Name : Name[number],
-    toRecordId<NewFrom>,
-    To,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-  out<
-    NewTo extends
-      | string
-      | string[]
-      | SurrealZodRecordId<string, SurrealZodRecordIdValue>,
-  >(
-    to: NewTo,
-  ): SurrealZodTableRelation<
-    Name extends string ? Name : Name[number],
-    From,
-    toRecordId<NewTo>,
-    Fields,
-    MergeConfig<Config, SurrealZodTableConfigSchemafull>
-  >;
-
-  dto(): SurrealZodTableRelation<
-    Name,
-    From,
-    To,
-    Fields,
-    MergeConfig<Config, SetConfig<"dto", true>>
-  >;
-  entity(): SurrealZodTableRelation<
-    Name,
-    From,
-    To,
-    Fields,
-    MergeConfig<Config, SetConfig<"dto", false>>
-  >;
-}
+// export interface SurrealZodTableRelation<
+//   Name extends string = string,
+//   From extends SurrealZodRecordId<
+//     string,
+//     SurrealZodRecordIdValue
+//   > = SurrealZodRecordId<string, SurrealZodRecordIdValue>,
+//   To extends SurrealZodRecordId<
+//     string,
+//     SurrealZodRecordIdValue
+//   > = SurrealZodRecordId<string, SurrealZodRecordIdValue>,
+//   Fields extends SurrealZodTableFields = {},
+//   Config extends SurrealZodTableConfig = MergeConfig<
+//     SurrealZodTableConfig,
+//     SurrealZodTableConfigSchemaless
+//   >,
+// > extends Omit<
+//     SurrealZodTable<
+//       Name,
+//       Omit<Fields, "in" | "out"> & {
+//         in: From;
+//         out: To;
+//       },
+//       Config
+//     >,
+//     "name" | "fields" | "schemafull" | "schemaless" | "dto" | "entity"
+//   > {
+// }
 
 type toRecordId<
   T extends
@@ -928,48 +1287,28 @@ type toRecordId<
       ? T
       : never;
 
-export const SurrealZodTableRelation: core.$constructor<SurrealZodTableRelation> =
-  core.$constructor("SurrealZodTableRelation", (inst, def) => {
-    SurrealZodTable.init(inst, def);
+// export const SurrealZodTableRelation: core.$constructor<SurrealZodTableRelation> =
+//   core.$constructor("SurrealZodTableRelation", (inst, def) => {
+//     // @ts-expect-error - false-positive
+//     SurrealZodTable.init(inst, def);
 
-    inst.from = (from) => {
-      return new SurrealZodTableRelation({
-        ...def,
-        fields: {
-          ...def.fields,
-          in: from instanceof SurrealZodRecordId ? from : recordId(from),
-        },
-      }) as any;
-    };
-    inst.to = (to) => {
-      return new SurrealZodTableRelation({
-        ...def,
-        fields: {
-          ...def.fields,
-          out: to instanceof SurrealZodRecordId ? to : recordId(to),
-        },
-      }) as any;
-    };
-    inst.in = inst.from;
-    inst.out = inst.to;
+//     inst.fields = (fields) => {
+//       return new SurrealZodTableRelation({
+//         ...def,
+//         fields: {
+//           ...def.fields,
+//           ...fields,
+//         },
+//       }) as any;
+//     };
 
-    inst.fields = (fields) => {
-      return new SurrealZodTableRelation({
-        ...def,
-        fields: {
-          ...def.fields,
-          ...fields,
-        },
-      }) as any;
-    };
+//     return inst;
+//   });
 
-    return inst;
-  });
-
-export function relationTable<Name extends string = string>(
-  name: Name,
-): SurrealZodTableRelation<Name> {
-  return table(name).relation();
-}
+// export function relationTable<Name extends string = string>(
+//   name: Name,
+// ): SurrealZodTableRelation<Name> {
+//   return table(name).relation();
+// }
 
 export type SurrealZodTypes = SurrealZodRecordId | SurrealZodTable;

@@ -1,275 +1,37 @@
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from "bun:test";
-import dedent from "dedent";
-import {
-  Decimal,
-  RecordId,
-  Surreal,
-  surql,
-  Table,
-  escapeIdent,
-} from "surrealdb";
-import type z4 from "zod/v4/core";
-import { sz } from "../src";
-import { checkMap } from "../src/surql";
-import {
-  startSurrealTestInstance,
-  testCase,
-  type TestCaseChildField,
-  type TestInstance,
-  type ZodTest,
-} from "./utils";
-import { SurrealZodTable, type SurrealZodType } from "../src/zod/schema";
+import { describe, expect, test } from "bun:test";
 import * as common from "./common";
-import z from "zod";
-import { inspect } from "bun";
+import { issue, issues, testCase } from "./utils";
+import { RecordId } from "surrealdb";
+import { z } from "../src";
+import dedent from "dedent";
 
 describe("surreal-zod", () => {
-  let testInstance: TestInstance;
-  let surreal: Surreal;
-  let testId = 0;
-
-  beforeAll(async () => {
-    testInstance = await startSurrealTestInstance();
-    surreal = testInstance.surreal;
-  });
-
-  beforeEach(async () => {
-    await surreal.use({ namespace: "test", database: `test_${testId}` });
-    testId++;
-  });
-
-  afterAll(async () => {
-    await testInstance.close();
-  });
-
-  function getFieldQuery(field: TestCaseChildField, table = "test") {
-    return dedent.withOptions({ alignValues: true })`
-      DEFINE FIELD OVERWRITE ${field.name} ON TABLE ${table} TYPE ${field.type}${
-        field.default
-          ? field.default.always
-            ? ` DEFAULT ALWAYS ${JSON.stringify(field.default.value)}`
-            : ` DEFAULT ${JSON.stringify(field.default.value)}`
-          : ""
-      }${
-        field.transforms?.length
-          ? ` ${dedent.withOptions({ alignValues: true })`
-              VALUE {
-                  ${field.transforms?.join("\n")}
-              }
-            `}`
-          : ""
-      }${
-        field.asserts?.length
-          ? ` ${dedent.withOptions({ alignValues: true })`
-              ASSERT {
-                  ${field.asserts?.join("\n")}
-              }
-            `}`
-          : ""
-      };\n
-    `;
-  }
-
-  function defineTest(
-    typeName: string,
-    schemas: SurrealZodType | SurrealZodType[],
-    expected: ZodTest,
-  ) {
-    test(typeName, async () => {
-      schemas = Array.isArray(schemas) ? schemas : [schemas];
-      for (const schema of schemas) {
-        const isTable = schema instanceof SurrealZodTable;
-        const table = isTable
-          ? schema
-          : sz.table("test").fields({
-              test: schema as any,
-            });
-        const query = table.toSurql("define", {
-          exists: "overwrite",
-          fields: true,
-        });
-        const tableName = table._zod.def.name;
-        const schemafull = table._zod.def.surreal.schemafull;
-        const tableType = table._zod.def.surreal.tableType;
-
-        const resultingQuery = query.query;
-        let expectedQuery = dedent.withOptions({ alignValues: true })`
-          DEFINE TABLE OVERWRITE ${escapeIdent(tableName)} TYPE ${tableType.toUpperCase()} ${schemafull ? "SCHEMAFULL" : "SCHEMALESS"};
-        `;
-        expectedQuery += "\n";
-        if (!isTable) {
-          expectedQuery += getFieldQuery(
-            {
-              name: "id",
-              type: "any",
-              default: expected.default ?? undefined,
-              transforms: expected.transforms ?? [],
-              asserts: expected.asserts ?? [],
-            },
-            tableName,
-          );
-          expectedQuery += getFieldQuery(
-            {
-              name: "test",
-              type: expected.type ?? "any",
-              default: expected.default ?? undefined,
-              transforms: expected.transforms ?? [],
-              asserts: expected.asserts ?? [],
-            },
-            tableName,
-          );
-        }
-        if (expected.children?.length) {
-          const childrenQueue = [
-            ...expected.children.map((child) => ({
-              ...child,
-              name: isTable ? child.name : `test.${child.name}`,
-            })),
-          ];
-          while (childrenQueue.length > 0) {
-            // biome-ignore lint/style/noNonNullAssertion: bounds accounted for
-            const child = childrenQueue.shift()!;
-            if (child.children?.length) {
-              childrenQueue.unshift(
-                ...child.children.map((subchild) => ({
-                  ...subchild,
-                  name: `${child.name}.${subchild.name}`,
-                })),
-              );
-            }
-            expectedQuery += getFieldQuery(child, tableName);
-          }
-        }
-
-        if (expected.debug) {
-          console.log("========== expected query ==========");
-          console.log(expectedQuery.trimEnd());
-          console.log("========== resulting query ==========");
-          console.log(resultingQuery.trimEnd());
-        }
-
-        expect(resultingQuery.trimEnd()).toEqual(expectedQuery.trimEnd());
-        await surreal.query(resultingQuery);
-
-        if (expected.tests) {
-          for (let i = 0; i < expected.tests.length; i++) {
-            // biome-ignore lint/style/noNonNullAssertion: bounds accounted for
-            const test = expected.tests[i]!;
-            const testCaseId = isTable
-              ? new RecordId(tableName, `testcase_${i}`)
-              : new RecordId("test", `testcase_${i}`);
-
-            if (expected.debug) {
-              console.log("========== inserting directly ==========");
-              console.log(
-                inspect(
-                  isTable
-                    ? {
-                        id: testCaseId,
-                        ...test.value,
-                      }
-                    : {
-                        id: testCaseId,
-                        test: test.value,
-                      },
-                  { colors: true, depth: 100 },
-                ),
-              );
-            }
-
-            const result = surreal
-              .query(
-                isTable
-                  ? surql`UPSERT ONLY ${testCaseId} CONTENT ${test.value}`
-                  : surql`UPSERT ONLY ${testCaseId} SET test = ${test.value}`,
-              )
-              .collect()
-              .then(([result]) => {
-                if (expected.debug) {
-                  console.log("========== inserted ==========");
-                  console.log(inspect(result, { colors: true, depth: 100 }));
-                }
-                return result.test;
-              })
-              .catch((error) => {
-                if (expected.debug) {
-                  console.log("========== errored with ==========");
-                  console.log(error.message);
-                }
-                throw error;
-              });
-            if ("error" in test) {
-              expect(result).rejects.toThrow(test.error);
-            } else if ("matches" in test) {
-              const awaitedResult = await result;
-              if (
-                test.matches instanceof RegExp ||
-                typeof test.matches === "string"
-              ) {
-                expect(awaitedResult).toMatch(test.matches);
-              } else {
-                expect(awaitedResult).toMatchObject(test.matches);
-              }
-            } else if ("check" in test) {
-              const awaitedResult = await result;
-              const checkResult = test.check(awaitedResult);
-              if (checkResult instanceof Promise) {
-                expect(checkResult).resolves.toBeUndefined();
-              } else {
-                expect(checkResult).toBeUndefined();
-              }
-            } else {
-              const awaitedResult = await result;
-              expect(awaitedResult).toEqual(
-                isTable
-                  ? {
-                      id: new RecordId("a", "b"),
-                      ...(test.equals ?? test.value),
-                    }
-                  : (test.equals ?? test.value),
-              );
-            }
-          }
-        }
-      }
-    });
-  }
-
-  const ctx: common.CommonTestsContext = {
-    z: sz as any,
-    defineTest,
-  };
-
-  common.number(ctx);
-
-  common.optional(ctx);
-  common.nonoptional(ctx);
-  common.null(ctx);
-  common.nullable(ctx);
-  common.nullish(ctx);
-  common.object(ctx);
+  const { defineTest } = common.setupSurrealTests();
 
   describe("recordId", () => {
     defineTest(
       "any table",
       [
-        sz.recordId(),
-        sz.recordId("user").anytable(),
-        sz.recordId(["user", "order"]).anytable(),
-        sz.recordId("user").type(z.string()).anytable(),
+        z.recordId(),
+        z.recordId("user").anytable(),
+        z.recordId(["user", "order"]).anytable(),
+        z.recordId("user").type(z.string()).anytable(),
       ],
       {
         type: "record",
         tests: [
-          testCase({ value: new RecordId("user", "123") }),
-          testCase({ value: new RecordId("admin", "123") }),
+          testCase({
+            value: new RecordId("user", "123"),
+            parse: {
+              data: new RecordId("user", "123"),
+            },
+          }),
+          testCase({
+            value: new RecordId("admin", "123"),
+            parse: {
+              data: new RecordId("admin", "123"),
+            },
+          }),
         ],
       },
     );
@@ -277,18 +39,27 @@ describe("surreal-zod", () => {
     defineTest(
       "single table",
       [
-        sz.recordId("user"),
-        sz.recordId("user").table("user"),
-        sz.recordId(["user", "order"]).table("user"),
-        sz.recordId("user").type(z.string()),
+        z.recordId("user"),
+        z.recordId("user").table("user"),
+        z.recordId(["user", "order"]).table("user"),
+        z.recordId("user").type(z.string()),
       ],
       {
         type: "record<user>",
         tests: [
-          testCase({ value: new RecordId("user", "123") }),
+          testCase({
+            value: new RecordId("user", "123"),
+            parse: {
+              data: new RecordId("user", "123"),
+            },
+          }),
           testCase({
             value: new RecordId("order", "123"),
-            error: /Expected `record<user>` but found `order:\u27e8123\u27e9`/i,
+            parse: {
+              error: issues([issue.invalid_value(["user"])]),
+            },
+            error:
+              /Expected `record<user>` but found `order:(\u27e8|`)123(\u27e9|`)`/i,
           }),
         ],
       },
@@ -297,19 +68,40 @@ describe("surreal-zod", () => {
     defineTest(
       "multiple tables",
       [
-        sz.recordId(["user", "admin"]),
-        sz.recordId(["user", "admin"]).type(z.string()),
+        z.recordId(["user", "admin"]),
+        z.recordId(["user", "admin"]).type(z.string()),
       ],
       {
         type: "record<user | admin>",
-        tests: [testCase({ value: new RecordId("user", "123") })],
+        tests: [
+          testCase({
+            value: new RecordId("user", "123"),
+            parse: {
+              data: new RecordId("user", "123"),
+            },
+          }),
+          testCase({
+            value: new RecordId("admin", "123"),
+            parse: {
+              data: new RecordId("admin", "123"),
+            },
+          }),
+          testCase({
+            value: new RecordId("test", "123"),
+            parse: {
+              error: issues([issue.invalid_value(["user", "admin"])]),
+            },
+            error:
+              /Expected `record<user|admin>` but found `test:(\u27e8|`)123(\u27e9|`)`/i,
+          }),
+        ],
       },
     );
   });
 
   describe("table", () => {
     test("toSurql('info')", () => {
-      const schema = sz.table("user").fields({
+      const schema = z.table("user").fields({
         name: z.string(),
       });
       const query = schema.toSurql("info");
@@ -318,7 +110,7 @@ describe("surreal-zod", () => {
       `);
     });
     test("toSurql('structure')", () => {
-      const schema = sz.table("user").fields({
+      const schema = z.table("user").fields({
         name: z.string(),
       });
       const query = schema.toSurql("structure");
@@ -326,8 +118,9 @@ describe("surreal-zod", () => {
         INFO FOR TABLE user STRUCTURE;
       `);
     });
+
     test("toSurql('remove')", () => {
-      const schema = sz.table("user").fields({
+      const schema = z.table("user").fields({
         name: z.string(),
       });
       const query = schema.toSurql("remove");
@@ -337,10 +130,10 @@ describe("surreal-zod", () => {
       const query2 = schema.toSurql("remove", { missing: "ignore" });
       expect(query2.query).toEqual(dedent.withOptions({ alignValues: true })`
         REMOVE TABLE IF EXISTS user;
-        `);
+      `);
     });
     test("toSurql('define') - default", () => {
-      const schema = sz.table("user").comment("Users table").fields({
+      const schema = z.table("user").comment("Users table").fields({
         name: z.string(),
       });
       const query = schema.toSurql("define");
@@ -349,7 +142,7 @@ describe("surreal-zod", () => {
       );
     });
     test("toSurql('define') - ignore", () => {
-      const schema = sz.table("user").fields({
+      const schema = z.table("user").fields({
         name: z.string(),
       });
       const query = schema.toSurql("define", { exists: "ignore" });
@@ -360,7 +153,7 @@ describe("surreal-zod", () => {
       );
     });
     test("toSurql('define') - overwrite", () => {
-      const schema = sz.table("user").fields({
+      const schema = z.table("user").fields({
         name: z.string(),
       });
       const query = schema.toSurql("define", { exists: "overwrite" });
@@ -371,7 +164,7 @@ describe("surreal-zod", () => {
       );
     });
     test("toSurql('define') - with fields", () => {
-      const schema = sz.table("user").fields({
+      const schema = z.table("user").fields({
         name: z.string(),
       });
       const query = schema.drop().toSurql("define", { fields: true });
@@ -384,13 +177,13 @@ describe("surreal-zod", () => {
       );
     });
     test("toSurql('define') - relation table", () => {
-      const schema = sz
+      const schema = z
         .table("like")
         .relation()
         .from("user")
-        .to(sz.recordId("post"))
+        .to(z.recordId("post"))
         .fields({
-          created_at: sz.string(),
+          created_at: z.string(),
         });
       const query = schema.toSurql("define");
       expect(query.query.trim()).toEqual(
@@ -400,13 +193,13 @@ describe("surreal-zod", () => {
       );
     });
     test("toSurql('define') - relation table with fields", () => {
-      const schema = sz
+      const schema = z
         .table("like")
         .relation()
-        .from(sz.recordId("user"))
+        .from(z.recordId("user"))
         .to(["post", "comment"])
         .fields({
-          created_at: sz.string(),
+          created_at: z.string(),
         });
       const query = schema
         .schemafull()
@@ -422,64 +215,649 @@ describe("surreal-zod", () => {
       );
     });
     test("toSurql(unknown statement)", () => {
-      const schema = sz.table("user").fields({
-        name: sz.string(),
+      const schema = z.table("user").fields({
+        name: z.string(),
       });
       expect(() => schema.toSurql("unknown" as any)).toThrow(
         /Invalid statement/i,
       );
     });
-  });
 
-  describe("object", () => {
-    describe("schemafull table", () => {
-      defineTest(
-        "strict object { name: string, age: number }",
-        sz
-          .table("user")
-          .fields({
-            test: sz.object({ name: sz.string(), age: sz.number() }).strict(),
-          })
-          .schemafull(),
-        {
-          children: [
-            { name: "id", type: "any" },
-            {
-              name: "test",
-              type: "object",
-              children: [
-                { name: "name", type: "string" },
-                { name: "age", type: "number" },
-              ],
-            },
-          ],
-        },
+    test(".name()", () => {
+      const before = z.table("user");
+      expect(before.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE user TYPE ANY SCHEMALESS;
+        `,
       );
 
-      defineTest(
-        "loose object { name: string, age: number }",
-        sz
-          .table("user")
-          .fields({
-            test: sz.object({ name: sz.string(), age: sz.number() }).loose(),
-          })
-          .schemafull(),
-        {
-          children: [
-            { name: "id", type: "any" },
-            {
-              name: "test",
-              type: "object FLEXIBLE",
-              children: [
-                { name: "name", type: "string" },
-                { name: "age", type: "number" },
-              ],
-            },
-          ],
-        },
+      const after = before.name("users");
+      expect(after.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE users TYPE ANY SCHEMALESS;
+        `,
       );
     });
+
+    describe(".fields()", () => {
+      test("assigns fields to the table", () => {
+        const before = z.table("user");
+        expect(before.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE user TYPE ANY SCHEMALESS;
+            DEFINE FIELD id ON TABLE user TYPE any;
+          `,
+        );
+
+        const after = before.fields({
+          name: z.string(),
+        });
+        expect(after.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE user TYPE ANY SCHEMALESS;
+            DEFINE FIELD id ON TABLE user TYPE any;
+            DEFINE FIELD name ON TABLE user TYPE string;
+          `,
+        );
+      });
+
+      test("id field is normalized", () => {
+        const normalizedTable = z.table("user").fields({
+          id: z.recordId("post"),
+        });
+        expect(
+          normalizedTable.toSurql("define", { fields: true }).query.trim(),
+        ).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE user TYPE ANY SCHEMALESS;
+            DEFINE FIELD id ON TABLE user TYPE any;
+          `,
+        );
+        expect(
+          normalizedTable.safeParse({ id: new RecordId("post", "123") }),
+        ).toMatchObject({
+          success: false,
+          error: issues([issue.invalid_value(["user"])]),
+        });
+
+        const normalizedType = z.table("user").fields({
+          id: z.string(),
+        });
+        expect(
+          normalizedType.toSurql("define", { fields: true }).query.trim(),
+        ).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE user TYPE ANY SCHEMALESS;
+            DEFINE FIELD id ON TABLE user TYPE string;
+          `,
+        );
+        expect(normalizedType.safeParse({ id: "123" })).toMatchObject({
+          success: false,
+          error: issues([issue.invalid_type("record_id")]),
+        });
+      });
+    });
+
+    describe(".relation()", () => {
+      test("assigns relation fields to the table", () => {
+        const schema = z.table("like").relation();
+        expect(schema.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE like TYPE RELATION SCHEMALESS;
+            DEFINE FIELD id ON TABLE like TYPE any;
+            DEFINE FIELD in ON TABLE like TYPE record;
+            DEFINE FIELD out ON TABLE like TYPE record;
+          `,
+        );
+        expect(
+          schema.safeParse({
+            id: new RecordId("like", "123"),
+          }),
+        ).toMatchObject({
+          success: false,
+          error: issues([
+            issue.invalid_type("record_id", { path: ["in"] }),
+            issue.invalid_type("record_id", { path: ["out"] }),
+          ]),
+        });
+      });
+
+      test(".from() assigns in field", () => {
+        const schema = z.table("like").relation().from("user");
+        expect(schema.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE RELATION FROM user SCHEMALESS;
+          DEFINE FIELD id ON TABLE like TYPE any;
+          DEFINE FIELD in ON TABLE like TYPE record<user>;
+          DEFINE FIELD out ON TABLE like TYPE record;
+        `,
+        );
+        expect(
+          schema.safeParse({
+            id: new RecordId("like", "123"),
+            in: new RecordId("_user", "123"),
+          }),
+        ).toMatchObject({
+          success: false,
+          error: issues([
+            issue.invalid_value(["user"], { path: ["in"] }),
+            issue.invalid_type("record_id", { path: ["out"] }),
+          ]),
+        });
+      });
+
+      test(".to() assigns out field", () => {
+        const schema = z.table("like").relation().to("post");
+        expect(schema.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE like TYPE RELATION TO post SCHEMALESS;
+            DEFINE FIELD id ON TABLE like TYPE any;
+            DEFINE FIELD in ON TABLE like TYPE record;
+            DEFINE FIELD out ON TABLE like TYPE record<post>;
+          `,
+        );
+        expect(
+          schema.safeParse({
+            id: new RecordId("like", "123"),
+            out: new RecordId("_post", "123"),
+          }),
+        ).toMatchObject({
+          success: false,
+          error: issues([
+            issue.invalid_value(["post"], { path: ["out"] }),
+            issue.invalid_type("record_id", { path: ["in"] }),
+          ]),
+        });
+      });
+
+      test(".fields() overrides in and out fields", () => {
+        const before = z.table("like").relation().from("user").to("post");
+        expect(before.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE like TYPE RELATION FROM user TO post SCHEMALESS;
+            DEFINE FIELD id ON TABLE like TYPE any;
+            DEFINE FIELD in ON TABLE like TYPE record<user>;
+            DEFINE FIELD out ON TABLE like TYPE record<post>;
+          `,
+        );
+        expect(
+          before.safeParse({
+            id: new RecordId("like", "123"),
+            in: new RecordId("_user", "123"),
+            out: new RecordId("_post", "123"),
+          }),
+        ).toMatchObject({
+          success: false,
+          error: issues([
+            issue.invalid_value(["user"], { path: ["in"] }),
+            issue.invalid_value(["post"], { path: ["out"] }),
+          ]),
+        });
+
+        const after = before.fields({
+          in: z.recordId("_user"),
+          out: z.recordId("_post"),
+        });
+        expect(after.toSurql("define", { fields: true }).query.trim()).toEqual(
+          dedent.withOptions({ alignValues: true })`
+            DEFINE TABLE like TYPE RELATION FROM _user TO _post SCHEMALESS;
+            DEFINE FIELD id ON TABLE like TYPE any;
+            DEFINE FIELD in ON TABLE like TYPE record<_user>;
+            DEFINE FIELD out ON TABLE like TYPE record<_post>;
+          `,
+        );
+        expect(
+          after.safeParse({
+            id: new RecordId("like", "123"),
+            in: new RecordId("_user", "123"),
+            out: new RecordId("_post", "123"),
+          }),
+        ).toMatchObject({
+          success: true,
+          data: {
+            id: new RecordId("like", "123"),
+            in: new RecordId("_user", "123"),
+            out: new RecordId("_post", "123"),
+          },
+        });
+      });
+    });
+
+    test(".normal()", () => {
+      const schema = z.table("like").normal();
+      expect(schema.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE NORMAL SCHEMALESS;
+        `,
+      );
+    });
+
+    test(".any()", () => {
+      const schema = z.table("like").normal().any();
+      expect(schema.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE ANY SCHEMALESS;
+        `,
+      );
+    });
+
+    test(".comment()", () => {
+      const schema = z.table("like").comment("This is a like table");
+      expect(schema.toSurql("define").query.trim()).toMatch(
+        /^DEFINE TABLE like TYPE ANY SCHEMALESS COMMENT \$bind__\d+;$/i,
+      );
+    });
+
+    test(".schemafull()", () => {
+      const schema = z.table("like").schemafull();
+      expect(schema.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE ANY SCHEMAFULL;
+        `,
+      );
+    });
+
+    test(".schemaless()", () => {
+      const schema = z.table("like").schemaless();
+      expect(schema.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE ANY SCHEMALESS;
+        `,
+      );
+    });
+
+    test(".drop()", () => {
+      const schema = z.table("like").drop();
+      expect(schema.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE ANY DROP SCHEMALESS;
+        `,
+      );
+    });
+
+    test(".nodrop()", () => {
+      const schema = z.table("like").drop().nodrop();
+      expect(schema.toSurql("define").query.trim()).toEqual(
+        dedent.withOptions({ alignValues: true })`
+          DEFINE TABLE like TYPE ANY SCHEMALESS;
+        `,
+      );
+    });
+
+    test(".record()", () => {
+      const schema = z.table("like").record();
+      expect(schema.safeParse(new RecordId("_like", "123"))).toMatchObject({
+        success: false,
+        error: issues([issue.invalid_value(["like"])]),
+      });
+    });
+
+    test(".dto() - schemaless", () => {
+      const schema = z.table("like").fields({
+        name: z.string(),
+      });
+      expect(
+        schema.safeParse({
+          name: "John Doe",
+          age: 99,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([issue.invalid_type("record_id", { path: ["id"] })]),
+      });
+
+      const dtoSchema = schema.dto();
+      expect(dtoSchema.safeParse({ name: "John Doe", age: 99 })).toMatchObject({
+        success: true,
+        data: { name: "John Doe", age: 99 },
+      });
+      expect(
+        dtoSchema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: 99,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([issue.invalid_value(["like"], { path: ["id"] })]),
+      });
+    });
+
+    test(".dto() - schemafull", () => {
+      const schema = z.table("like").schemafull().fields({
+        name: z.string(),
+      });
+      expect(
+        schema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: 99,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_value(["like"], { path: ["id"] }),
+          issue.unrecognized_keys(["age"]),
+        ]),
+      });
+
+      const dtoSchema = schema.dto();
+      expect(dtoSchema.safeParse({ name: "John Doe", age: 99 })).toMatchObject({
+        success: false,
+        error: issues([issue.unrecognized_keys(["age"])]),
+      });
+      expect(
+        dtoSchema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: 99,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_value(["like"], { path: ["id"] }),
+          issue.unrecognized_keys(["age"]),
+        ]),
+      });
+    });
+
+    test(".extend()", () => {
+      const schema = z
+        .table("like")
+        .fields({
+          name: z.string(),
+        })
+        .extend({
+          age: z.number(),
+        });
+      expect(
+        schema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_value(["like"], { path: ["id"] }),
+          issue.invalid_type("number", { path: ["age"] }),
+        ]),
+      });
+    });
+
+    test(".safeExtend()", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+        })
+        .safeExtend({
+          age: z.number(),
+        });
+      expect(
+        schema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: "18",
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_value(["like"], { path: ["id"] }),
+          issue.invalid_type("number", { path: ["age"] }),
+        ]),
+      });
+    });
+
+    test(".pick() - id included by default", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .pick({ name: true });
+      expect(
+        schema.safeParse({
+          id: new RecordId("like", "123"),
+          name: "John Doe",
+        }),
+      ).toMatchObject({
+        success: true,
+        data: { id: new RecordId("like", "123"), name: "John Doe" },
+      });
+      expect(
+        schema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: 18,
+          active: true,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_value(["like"], { path: ["id"] }),
+          issue.unrecognized_keys(["age", "active"]),
+        ]),
+      });
+    });
+
+    test(".pick() - without id ", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .pick({ id: false, name: true });
+      expect(
+        schema.safeParse({
+          id: new RecordId("like", "123"),
+          name: "John Doe",
+          age: 18,
+          active: true,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([issue.unrecognized_keys(["id", "age", "active"])]),
+      });
+    });
+
+    test(".omit() - id included by default", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .omit({ age: true });
+      expect(
+        schema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: 18,
+          active: true,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([
+          issue.unrecognized_keys(["age"]),
+          issue.invalid_value(["like"], { path: ["id"] }),
+        ]),
+      });
+    });
+    test(".omit() - without id", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .omit({ id: true, age: true });
+      expect(
+        schema.safeParse({
+          id: new RecordId("_like", "123"),
+          name: "John Doe",
+          age: 18,
+          active: true,
+        }),
+      ).toMatchObject({
+        success: false,
+        error: issues([issue.unrecognized_keys(["id", "age"])]),
+      });
+    });
+
+    test(".partial() - id not marked as optional by default", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .partial();
+      expect(schema.safeParse({})).toMatchObject({
+        success: false,
+        error: issues([issue.invalid_type("record_id", { path: ["id"] })]),
+      });
+    });
+
+    test(".partial() - partial all fields + id", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .partial(true);
+      expect(schema.safeParse({})).toMatchObject({
+        success: true,
+        data: {},
+      });
+    });
+
+    test(".partial() - partial id + mask", () => {
+      const schema = z
+        .table("like")
+        .schemafull()
+        .fields({
+          id: z.recordId("like").type(z.number()),
+          name: z.string(),
+          age: z.number(),
+          active: z.boolean(),
+        })
+        .partial({ id: true, age: true, active: true });
+      expect(schema.safeParse({})).toMatchObject({
+        success: false,
+        error: issues([issue.invalid_type("string", { path: ["name"] })]),
+      });
+    });
+
+    test(".required()", () => {
+      const before = z.table("like").schemafull().fields({
+        name: z.string(),
+        age: z.number().optional(),
+        active: z.boolean().optional(),
+      });
+      expect(before.safeParse({})).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_type("record_id", { path: ["id"] }),
+          issue.invalid_type("string", { path: ["name"] }),
+        ]),
+      });
+
+      const after = before.required();
+      expect(after.safeParse({})).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_type("record_id", { path: ["id"] }),
+          issue.invalid_type("string", { path: ["name"] }),
+          issue.invalid_type("nonoptional", { path: ["age"] }),
+          issue.invalid_type("nonoptional", { path: ["active"] }),
+        ]),
+      });
+    });
+
+    test(".required() - with mask", () => {
+      const before = z.table("like").schemafull().fields({
+        name: z.string(),
+        age: z.number().optional(),
+        active: z.boolean().optional(),
+      });
+      const after = before.required({ age: true, active: true });
+      expect(after.safeParse({})).toMatchObject({
+        success: false,
+        error: issues([
+          issue.invalid_type("record_id", { path: ["id"] }),
+          issue.invalid_type("string", { path: ["name"] }),
+          issue.invalid_type("nonoptional", { path: ["age"] }),
+          issue.invalid_type("nonoptional", { path: ["active"] }),
+        ]),
+      });
+    });
   });
+
+  // describe("object", () => {
+  //   describe("schemafull table", () => {
+  //     defineTest(
+  //       "strict object { name: string, age: number }",
+  //       sz
+  //         .table("user")
+  //         .fields({
+  //           test: sz.object({ name: sz.string(), age: sz.number() }).strict(),
+  //         })
+  //         .schemafull(),
+  //       {
+  //         children: [
+  //           { name: "id", type: "any" },
+  //           {
+  //             name: "test",
+  //             type: "object",
+  //             children: [
+  //               { name: "name", type: "string" },
+  //               { name: "age", type: "number" },
+  //             ],
+  //           },
+  //         ],
+  //       },
+  //     );
+
+  //     defineTest(
+  //       "loose object { name: string, age: number }",
+  //       sz
+  //         .table("user")
+  //         .fields({
+  //           test: sz.object({ name: sz.string(), age: sz.number() }).loose(),
+  //         })
+  //         .schemafull(),
+  //       {
+  //         children: [
+  //           { name: "id", type: "any" },
+  //           {
+  //             name: "test",
+  //             type: "object FLEXIBLE",
+  //             children: [
+  //               { name: "name", type: "string" },
+  //               { name: "age", type: "number" },
+  //             ],
+  //           },
+  //         ],
+  //       },
+  //     );
+  //   });
+  // });
 
   // defineTest("array<bool>", [z.array(z.boolean()), z.boolean().array()], {
   //   type: "array<bool>",
